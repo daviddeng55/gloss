@@ -1,6 +1,7 @@
-// Never-record list: checked before every capture. Edit never-record.json to change it.
+// Decides which window a capture is about, and whether it may be recorded at all.
+// Edit never-record.json to change the never-record list.
 import { readFileSync } from "node:fs";
-import type { FrontWindow } from "./helper.ts";
+import type { WindowInfo } from "./helper.ts";
 
 export type NeverRecord = { apps: string[]; titles: RegExp[] };
 
@@ -12,12 +13,50 @@ export function loadNeverRecord(path: string): NeverRecord {
   };
 }
 
+/**
+ * The window you're working in. The topmost window tells us the app, but it can be a toolbar
+ * strip (Chrome in full screen draws its tabs and toolbar as separate untitled windows), so we
+ * take that app's frontmost titled window of a reasonable size instead.
+ */
+export function pickFrontWindow(windows: WindowInfo[]): WindowInfo | null {
+  const top = windows[0];
+  if (!top) return null;
+  const mine = windows.filter((w) => w.pid === top.pid && w.width >= 200 && w.height >= 200);
+  return mine.find((w) => w.title.trim() !== "") ?? mine[0] ?? top;
+}
+
+// Code editors and terminals: the session itself runs in one of these.
+const EDITORS_AND_TERMINALS = new Set([
+  "com.microsoft.vscode",
+  "com.microsoft.vscodeinsiders",
+  "com.todesktop.230313mzl4w4u92", // Cursor
+  "dev.zed.zed",
+  "com.apple.terminal",
+  "com.googlecode.iterm2",
+  "dev.warp.warp-stable",
+  "com.mitchellh.ghostty",
+]);
+
+/**
+ * This project's own windows: an editor or terminal whose title mentions the project folder or the
+ * session command. Studying in VS Code in another folder (e.g. CS 135 work) is still recorded.
+ */
+export function isOwnWindow(w: WindowInfo, projectName: string): boolean {
+  if (!EDITORS_AND_TERMINALS.has(w.bundleId.toLowerCase())) return false;
+  if (w.title.trim() === "") return true; // can't tell what's in it, so play safe
+  const name = projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[\\s—–\\-|/])${name}($|[\\s—–\\-|/])|session\\.ts|npm run session|study-buddy`, "i").test(
+    w.title,
+  );
+}
+
 /** Returns why this window must not be recorded, or null if it's fine. */
-export function blockedReason(w: FrontWindow, list: NeverRecord): string | null {
+export function blockedReason(w: WindowInfo, list: NeverRecord, projectName: string): string | null {
   if (list.apps.includes(w.bundleId.toLowerCase()) || list.apps.includes(w.app.toLowerCase())) {
-    return `app "${w.app}" is on the never-record list`;
+    return `${w.app} is on the never-record list`;
   }
   const hit = list.titles.find((re) => re.test(w.title));
-  if (hit) return `window title matches never-record rule /${hit.source}/`;
+  if (hit) return `"${w.title}" matches never-record rule /${hit.source}/`;
+  if (isOwnWindow(w, projectName)) return `${w.app} is showing this project (${projectName}), not study material`;
   return null;
 }

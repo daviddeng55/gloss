@@ -2,12 +2,13 @@
 //   npm run session -- --course math135 --minutes 10
 // Press Ctrl+C to end early; the transcript is saved either way.
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { TextCleaner } from "./clean.ts";
 import { VisionHelper } from "./helper.ts";
-import { blockedReason, loadNeverRecord } from "./privacy.ts";
+import { blockedReason, loadNeverRecord, pickFrontWindow } from "./privacy.ts";
 import { redact } from "./redact.ts";
 import { TranscriptWriter } from "./transcript.ts";
 
@@ -19,7 +20,7 @@ const { values: args } = parseArgs({
     goal: { type: "string", default: "" },
     minutes: { type: "string", default: "10" },
     interval: { type: "string", default: "5" }, // seconds between captures
-    mode: { type: "string", default: "window" }, // "window" (front window only) or "display" (whole screen)
+    mode: { type: "string", default: "window" }, // "window" (front window only) or "display" (whole screen minus blocked windows)
     engine: { type: "string", default: "document" }, // "document" (paragraphs) or "lines"
     "language-correction": { type: "boolean", default: false },
     threshold: { type: "string", default: "0.02" }, // fraction of the image that must change
@@ -73,6 +74,7 @@ Screen Recording permission is needed.
 }
 
 const neverRecord = loadNeverRecord(root("never-record.json"));
+const projectName = basename(root("."));
 const cleaner = new TextCleaner({ engine, mode, minConfidence: 0.35 });
 const startedAt = new Date();
 const transcript = new TranscriptWriter(args.out, course, startedAt, {
@@ -85,6 +87,7 @@ const stats = {
   ticks: 0,
   unchanged: 0,
   neverRecord: 0,
+  changedMidCapture: 0,
   readOk: 0,
   errors: 0,
   ocrMsTotal: 0,
@@ -113,28 +116,46 @@ while (!stopping && Date.now() < endAt) {
   const tickStart = Date.now();
   stats.ticks++;
   try {
-    const front = await helper.frontmost();
-    const reason = blockedReason(front, neverRecord);
-    if (reason) {
+    const windows = await helper.windows();
+    const front = pickFrontWindow(windows);
+    const reason = front ? blockedReason(front, neverRecord, projectName) : "no window on screen";
+    if (!front || reason) {
       stats.neverRecord++;
+      lastSource = "";
       console.log(`${time()}  skipped: ${reason}`);
     } else {
       // Force a fresh read whenever the app or window changes.
       const source = `${front.bundleId}|${front.title}`;
-      const res = await helper.capture({ mode, threshold, engine, languageCorrection, force: source !== lastSource });
+      // Whole-display mode also hides any other window that must not be recorded (and this project's own).
+      const excludeWindowIds =
+        mode === "display"
+          ? windows.filter((w) => blockedReason(w, neverRecord, projectName)).map((w) => w.windowId)
+          : [];
+      const res = await helper.capture({
+        mode,
+        windowId: front.windowId,
+        excludeWindowIds,
+        threshold,
+        engine,
+        languageCorrection,
+        force: source !== lastSource,
+      });
       lastSource = source;
-      // Re-check after capturing, in case the window changed in between.
-      const lateReason = blockedReason(res, neverRecord);
-      if (lateReason) {
-        stats.neverRecord++;
-        console.log(`${time()}  skipped: ${lateReason}`);
+      const label = `${front.app} — ${front.title || "(untitled)"}`;
+      // Check the window again: if the tab or window changed while capturing (say, to Gmail), the
+      // image may not match the title we checked, so throw it away and read again next time.
+      const after = (await helper.windows()).find((w) => w.windowId === front.windowId);
+      if (!res.skipped && (!after || after.title !== front.title)) {
+        stats.changedMidCapture++;
+        lastSource = "";
+        console.log(`${time()}  discarded: window changed while capturing`);
       } else if (res.skipped) {
         stats.unchanged++;
-        console.log(`${time()}  unchanged (${(res.changeRatio * 100).toFixed(1)}% different)`);
+        console.log(`${time()}  unchanged (${(res.changeRatio * 100).toFixed(1)}% different)  ${label}`);
       } else {
         stats.readOk++;
         stats.ocrMsTotal += res.ms ?? 0;
-        const { paragraphs, stats: c } = cleaner.clean(res.blocks ?? []);
+        const { paragraphs, stats: c } = cleaner.clean(res.blocks ?? [], front);
         stats.linesIn += c.linesIn;
         stats.noise += c.noise;
         stats.duplicate += c.duplicate;
@@ -142,10 +163,10 @@ while (!stopping && Date.now() < endAt) {
         if (paragraphs.length) {
           const red = redact(paragraphs.join("\n\n"));
           stats.redactions += red.count;
-          transcript.add({ capturedAt: new Date().toISOString(), app: res.app, title: res.title, text: red.text });
+          transcript.add({ capturedAt: new Date().toISOString(), app: front.app, title: front.title, text: red.text });
         }
         console.log(
-          `${time()}  read ${res.app}: ${c.linesIn} lines → kept ${c.kept} new, ${c.duplicate} repeated, ${c.noise} noise  (${res.ms} ms)`,
+          `${time()}  read ${label}: ${c.linesIn} lines → kept ${c.kept} new, ${c.duplicate} repeated, ${c.noise} noise  (${res.ms} ms)`,
         );
       }
     }
@@ -166,7 +187,8 @@ transcript.finish({
   "Capture checks": stats.ticks,
   "Read (screen changed)": stats.readOk,
   "Skipped — unchanged": stats.unchanged,
-  "Skipped — never-record list": stats.neverRecord,
+  "Skipped — never-record list or this project": stats.neverRecord,
+  "Discarded — window changed mid-capture": stats.changedMidCapture,
   Errors: stats.errors,
   "Average read time": stats.readOk ? `${Math.round(stats.ocrMsTotal / stats.readOk)} ms` : "—",
   "Lines recognised": stats.linesIn,
@@ -179,5 +201,5 @@ console.log(`
 Session saved (${mins.toFixed(1)} min).
   Transcript: ${transcript.mdPath}
   Data:       ${transcript.jsonlPath}
-  ${stats.readOk} reads · ${stats.unchanged} unchanged · ${stats.neverRecord} never-record · ${stats.errors} errors
+  ${stats.readOk} reads · ${stats.unchanged} unchanged · ${stats.neverRecord} skipped (private/own windows) · ${stats.errors} errors
   ${stats.kept} lines kept · ${stats.duplicate} repeats dropped · ${stats.noise} noise dropped`);

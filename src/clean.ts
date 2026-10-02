@@ -17,23 +17,46 @@ const UI_WORDS = new Set([
   "skip to main content", "reading list", "not now", "learn more", "accept all", "reject all",
 ]);
 
+// Browser and toolbar labels seen in real sessions.
+const BROWSER_CHROME =
+  /^(ask (gemini|google)|all bookmarks|\+ ?ask google|ai mode|add shortcut|customi[sz]e chrome|finish update|relaunch to update|automatic zoom|of \d+|page \d+ of \d+)$/;
+
 const CLOCK = /^\d{1,2}:\d{2}(:\d{2})?\s*([ap]\.?m\.?)?$/i;
 const PERCENT = /^\d{1,3}\s?%$/;
 const URL_ONLY = /^(https?:\/\/)?([\w-]+\.)+[a-z]{2,}(\/\S*)?$/i;
 
+const MATH_SIGN = /[=<>≤≥≠]|\b\w ?\| ?\w\b/; // comparisons, or "a | b" (divides)
+
 export function isNoiseLine(line: string): boolean {
   const t = line.trim();
-  if (!/[\p{L}\p{N}]/u.test(t)) return true; // only symbols/bullets
+  const alnum = (t.match(/[\p{L}\p{N}]/gu) ?? []).length;
+  // Fragments like "inG", "D2L", "10 c*", "PM": too short to mean anything, unless it's math like "x = 1".
+  if (alnum < 4 && !MATH_SIGN.test(t)) return true;
+  // Garbled recognition, e.g. "22[ +1 = 2[2[[[3]" = 10 •51 [ =]": lots of stray brackets or #.
+  if ((t.match(/[[\]{}#]/g) ?? []).length >= 4) return true;
   const lower = t.toLowerCase().replace(/[.:…>›»]+$/, "").trim();
-  if (UI_WORDS.has(lower)) return true;
+  if (UI_WORDS.has(lower) || BROWSER_CHROME.test(lower)) return true;
+  // PDF viewer toolbar: page counter "6 / 36" or zoom "100%" with hardly any words around it.
+  const letters = (t.match(/\p{L}/gu) ?? []).length;
+  if ((/^\d+ \/ \d+(\s|$)/.test(t) || /\b\d{2,3}\s?%/.test(t)) && letters < 4) return true;
   if (CLOCK.test(t) || PERCENT.test(t)) return true;
   if (URL_ONLY.test(t) && !t.includes(" ")) return true;
   return false;
 }
 
-/** Comparison key: lowercase letters, digits and math symbols only, so OCR spacing jitter doesn't matter. */
+/**
+ * Comparison key: lowercase letters and digits only, with look-alike characters folded together,
+ * so "10 • 5' = 18" and "10-5º =18" (the same line read twice) compare as equal or nearly so.
+ */
 export function lineKey(line: string): string {
-  return line.toLowerCase().replace(/[^\p{L}\p{N}=+\-*/^<>≤≥≠∈∀∃Σ∑∫√|()]/gu, "");
+  return line
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[º°]/g, "o")
+    .replace(/[^\p{L}\p{N}]/gu, "")
+    .replace(/[il|!]/g, "1")
+    .replace(/o/g, "0")
+    .replace(/[кκ]/g, "k");
 }
 
 function trigrams(s: string): Set<string> {
@@ -46,6 +69,29 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   let inter = 0;
   for (const x of a) if (b.has(x)) inter++;
   return inter / (a.size + b.size - inter || 1);
+}
+
+/** Edit distance between a and b, giving up (returning max + 1) once it must exceed `max`. */
+export function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      rowMin = Math.min(rowMin, cur[j]);
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** Two keys are the same line read twice if at most ~15% of characters differ (OCR jitter, not a different line). */
+export function similarKeys(a: string, b: string): boolean {
+  const max = Math.floor(Math.max(a.length, b.length) * 0.15);
+  return editDistance(a, b, max) <= max;
 }
 
 /** Group single lines (from the "lines" engine) into paragraphs by vertical spacing and left edge. */
@@ -82,10 +128,19 @@ function merge(lines: TextBlock[]): TextBlock {
 
 type Seen = { key: string; grams: Set<string> };
 
+const BROWSERS = new Set([
+  "com.google.chrome",
+  "com.apple.safari",
+  "company.thebrowser.browser", // Arc
+  "org.mozilla.firefox",
+  "com.microsoft.edgemac",
+  "com.brave.browser",
+]);
+
 export class TextCleaner {
   private exact = new Set<string>();
   private recent: Seen[] = []; // for near-duplicate checks
-  private readonly maxRecent = 5000;
+  private readonly maxRecent = 3000;
 
   private opts: { engine: "lines" | "document"; mode: "window" | "display"; minConfidence: number };
 
@@ -94,12 +149,23 @@ export class TextCleaner {
   }
 
   /** Returns the paragraphs worth keeping from one capture, in reading order. */
-  clean(blocks: TextBlock[]): { paragraphs: string[]; stats: CleanStats } {
+  clean(
+    blocks: TextBlock[],
+    win: { bundleId: string; height: number } = { bundleId: "", height: 0 },
+  ): { paragraphs: string[]; stats: CleanStats } {
     const stats: CleanStats = { linesIn: 0, noise: 0, duplicate: 0, kept: 0 };
 
     let usable = blocks.filter((b) => {
       // In full-display mode the top ~3.5% is the macOS menu bar.
       if (this.opts.mode === "display" && b.box.y + b.box.h < 0.035) return false;
+      if (this.opts.mode === "window") {
+        // Tabs, address bar and bookmarks bar (browsers, ~105 pt), or a toolbar (other apps, ~40 pt).
+        const chromePt = BROWSERS.has(win.bundleId.toLowerCase()) ? 105 : 40;
+        const chrome = win.height > 0 ? chromePt / win.height : 0.05;
+        if (b.box.y + b.box.h < chrome) return false;
+        // Status bars along the bottom edge.
+        if (b.box.y > 0.965 && b.text.split(/\s+/).length <= 6) return false;
+      }
       if (this.opts.engine === "lines") {
         // Per-line confidence is reliable for this engine; very low means garbled.
         if (b.confidence < this.opts.minConfidence) return false;
@@ -145,11 +211,13 @@ export class TextCleaner {
     const key = lineKey(line);
     if (key.length === 0) return true;
     if (this.exact.has(key)) return true;
-    if (key.length < 12) return false; // short lines: exact match only
+    if (key.length < 8) return false; // short lines: exact match only
     const grams = trigrams(key);
-    for (const s of this.recent) {
+    for (let i = this.recent.length - 1; i >= 0; i--) {
+      const s = this.recent[i];
       if (Math.abs(s.key.length - key.length) > key.length * 0.25) continue;
-      if (jaccard(grams, s.grams) >= 0.8) return true;
+      // Cheap filter first, then the exact edit-distance check.
+      if (jaccard(grams, s.grams) >= 0.3 && similarKeys(key, s.key)) return true;
     }
     return false;
   }
@@ -158,7 +226,7 @@ export class TextCleaner {
     const key = lineKey(line);
     if (!key || this.exact.has(key)) return;
     this.exact.add(key);
-    if (key.length >= 12) {
+    if (key.length >= 8) {
       this.recent.push({ key, grams: trigrams(key) });
       if (this.recent.length > this.maxRecent) this.recent.shift();
     }

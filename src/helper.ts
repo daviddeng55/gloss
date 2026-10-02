@@ -15,9 +15,17 @@ export type OcrOptions = {
   languages?: string[];
 };
 
-export type FrontWindow = { app: string; bundleId: string; title: string };
+export type WindowInfo = {
+  windowId: number;
+  app: string;
+  bundleId: string;
+  pid: number;
+  title: string;
+  width: number; // points
+  height: number;
+};
 
-export type CaptureResult = FrontWindow & {
+export type CaptureResult = {
   skipped: boolean;
   changeRatio: number;
   width: number;
@@ -65,10 +73,19 @@ export class VisionHelper {
     else p.reject(new Error(msg.error ?? "vision-helper error"));
   }
 
-  private request<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+  /** Rejects after `timeoutMs` so one stuck capture (e.g. after the laptop sleeps) can't freeze a session. */
+  private request<T>(cmd: string, args: Record<string, unknown> = {}, timeoutMs = 20_000): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`vision-helper did not answer "${cmd}" within ${timeoutMs / 1000}s`));
+      }, timeoutMs);
+      const done = (fn: (v: any) => void) => (v: any) => {
+        clearTimeout(timer);
+        fn(v);
+      };
+      this.pending.set(id, { resolve: done(resolve), reject: done(reject) });
       this.proc.stdin.write(JSON.stringify({ id, cmd, ...args }) + "\n");
     });
   }
@@ -82,12 +99,24 @@ export class VisionHelper {
     return (await this.request<{ granted: boolean }>("requestPermission")).granted;
   }
 
-  frontmost(): Promise<FrontWindow> {
-    return this.request("frontmost");
+  /** On-screen windows, front to back. */
+  async windows(): Promise<WindowInfo[]> {
+    return (await this.request<{ windows: WindowInfo[] }>("windows")).windows;
   }
 
-  /** Captures the screen in memory. Text is only read if the image changed more than `threshold` (0–1). */
-  capture(args: OcrOptions & { mode?: "window" | "display"; threshold?: number; force?: boolean }): Promise<CaptureResult> {
+  /**
+   * Captures one window ("window" mode) or its whole display minus `excludeWindowIds` ("display" mode),
+   * in memory. Text is only read if the image changed more than `threshold` (0–1).
+   */
+  capture(
+    args: OcrOptions & {
+      windowId: number;
+      excludeWindowIds?: number[];
+      mode?: "window" | "display";
+      threshold?: number;
+      force?: boolean;
+    },
+  ): Promise<CaptureResult> {
     return this.request("capture", args);
   }
 

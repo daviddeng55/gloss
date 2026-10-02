@@ -1,5 +1,5 @@
 {
-  "_comment": "Checked before every capture. Apps match the bundle ID or app name exactly; titles are case-insensitive regular expressions matched against the window title.",
+  "_comment": "Checked before every capture. Apps match the bundle ID or app name exactly; titles are case-insensitive regular expressions matched against the window title (for browsers, the page title).",
   "apps": [
     "com.1password.1password",
     "com.agilebits.onepassword7",
@@ -8,7 +8,14 @@
     "com.apple.Passwords",
     "com.apple.MobileSMS",
     "com.apple.loginwindow",
-    "com.apple.ScreenSaver.Engine"
+    "com.apple.ScreenSaver.Engine",
+    "com.apple.mail",
+    "com.anthropic.claudefordesktop",
+    "com.openai.chat",
+    "com.hnc.Discord",
+    "com.tinyspeck.slackmacgap",
+    "net.whatsapp.WhatsApp",
+    "com.facebook.archon"
   ],
   "titles": [
     "private browsing",
@@ -17,6 +24,13 @@
     "online banking",
     "\\b(rbc|td|bmo|cibc|scotiabank|tangerine|wealthsimple|simplii|desjardins)\\b.*\\b(bank|banking|sign in|login|accounts?)\\b",
     "\\bpassword manager\\b",
-    "\\bsign in\\b.*\\bpassword\\b"
+    "\\bsign in\\b.*\\bpassword\\b",
+    "\\bgmail\\b",
+    "\\binbox\\b",
+    "\\| linkedin\\b",
+    "^linkedin\\b",
+    "\\bmessages?\\b.*\\b(instagram|facebook|messenger)\\b",
+    "\\bdiscord\\b",
+    "\\binterac\\b"
   ]
 }

@@ -20,7 +20,15 @@ Screenshots are captured in memory, read, and discarded; they are never written 
 Options: `--interval 5` (seconds), `--mode window|display`, `--engine document|lines`,
 `--language-correction`, `--threshold 0.02` (how much of the screen must change before re-reading).
 
-Edit `never-record.json` to add apps or window titles that must never be captured.
+Use the default `window` mode: it captures only the window you're working in. `display` mode captures
+the whole screen (minus blocked windows) and picks up much more unrelated text.
+
+What is never captured:
+- Apps and page titles in `never-record.json` (password managers, Messages, Mail/Gmail, LinkedIn,
+  chat apps, the Claude and ChatGPT apps, banking). Edit it to add or remove entries.
+- This project's own windows: VS Code or a terminal whose title mentions this folder. VS Code open on
+  another folder (e.g. CS 135 work) is still recorded.
+- Private/incognito windows are only caught when the title says so (Safari's usually doesn't).
 
 Check how well text recognition reads a page (e.g. math notes):
 

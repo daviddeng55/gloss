@@ -5,8 +5,8 @@
 // Requests (one per line on stdin):
 //   {"id":1,"cmd":"permission"}                  -> is Screen Recording granted?
 //   {"id":2,"cmd":"requestPermission"}           -> ask macOS to show the permission prompt
-//   {"id":3,"cmd":"frontmost"}                   -> frontmost app + window title
-//   {"id":4,"cmd":"capture", ...options}         -> capture, compare, maybe read text
+//   {"id":3,"cmd":"windows"}                     -> on-screen windows, front to back
+//   {"id":4,"cmd":"capture","windowId":N, ...}   -> capture, compare, maybe read text
 //   {"id":5,"cmd":"ocrFile","path":"...", ...}   -> read text from an image file (for testing)
 //
 // Build: npm run build:helper
@@ -25,43 +25,54 @@ func send(_ obj: [String: Any]) {
     FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
 }
 
-// MARK: - Frontmost window
+// MARK: - Windows
 
-struct FrontWindow {
+struct WindowInfo {
+    let id: CGWindowID
     let app: String
     let bundleId: String
     let pid: pid_t
-    let windowId: CGWindowID?
     let title: String
+    let width: Int
+    let height: Int
 }
 
-/// Finds the frontmost app and its topmost normal window.
-/// CGWindowList returns windows front-to-back, so the first match is the one on top.
+/// Normal on-screen windows, front to back. The first one belongs to the app you're working in
+/// (but may be a toolbar strip, e.g. Chrome in full screen; Node picks the real window).
+/// We read the live window order from the window server rather than asking NSWorkspace for
+/// the "frontmost application": in a command-line program NSWorkspace never refreshes, so it
+/// keeps reporting whichever app was in front when the helper started.
 /// Window titles are only visible once Screen Recording permission is granted.
-func frontWindow() -> FrontWindow? {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-    let pid = app.processIdentifier
+func windowList() -> [WindowInfo] {
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
         as? [[String: Any]] ?? []
+    var bundleIds: [pid_t: String] = [:]
+    var out: [WindowInfo] = []
     for info in list {
-        guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
-              (info[kCGWindowLayer as String] as? Int) == 0 else { continue }
+        guard (info[kCGWindowLayer as String] as? Int) == 0,
+              (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+              let id = info[kCGWindowNumber as String] as? CGWindowID,
+              let pid = info[kCGWindowOwnerPID as String] as? pid_t else { continue }
         let bounds = info[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
         if (bounds["Width"] ?? 0) < 100 || (bounds["Height"] ?? 0) < 100 { continue }
-        return FrontWindow(
-            app: app.localizedName ?? "",
-            bundleId: app.bundleIdentifier ?? "",
+        if bundleIds[pid] == nil {
+            bundleIds[pid] = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+        }
+        out.append(WindowInfo(
+            id: id,
+            app: info[kCGWindowOwnerName as String] as? String ?? "",
+            bundleId: bundleIds[pid] ?? "",
             pid: pid,
-            windowId: info[kCGWindowNumber as String] as? CGWindowID,
-            title: info[kCGWindowName as String] as? String ?? "")
+            title: info[kCGWindowName as String] as? String ?? "",
+            width: Int(bounds["Width"] ?? 0),
+            height: Int(bounds["Height"] ?? 0)))
     }
-    return FrontWindow(app: app.localizedName ?? "", bundleId: app.bundleIdentifier ?? "",
-                       pid: pid, windowId: nil, title: "")
+    return out
 }
 
-func frontDict(_ w: FrontWindow?) -> [String: Any] {
-    guard let w else { return ["app": "", "bundleId": "", "title": ""] }
-    return ["app": w.app, "bundleId": w.bundleId, "title": w.title]
+func windowDict(_ w: WindowInfo) -> [String: Any] {
+    ["windowId": Int(w.id), "app": w.app, "bundleId": w.bundleId, "pid": Int(w.pid), "title": w.title,
+     "width": w.width, "height": w.height]
 }
 
 // MARK: - Screen capture (ScreenCaptureKit, in memory)
@@ -71,24 +82,24 @@ enum HelperError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .noPermission: return "Screen Recording permission is not granted"
-        case .noWindow: return "No capturable window in the frontmost app"
+        case .noWindow: return "That window is no longer on screen"
         case .noDisplay: return "No display found"
         case .badImage(let p): return "Could not read image: \(p)"
         }
     }
 }
 
-/// mode "window": just the frontmost window (no menu bar or Dock, so less noise).
-/// mode "display": the whole display that the frontmost window is on.
-func capture(mode: String, front: FrontWindow?) async throws -> CGImage {
+/// mode "window": just one window (no menu bar, Dock or other windows, so less noise).
+/// mode "display": the whole display that window is on, minus any windows in `exclude`.
+func capture(mode: String, windowId: CGWindowID, exclude: Set<CGWindowID>) async throws -> CGImage {
     let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
     let config = SCStreamConfiguration()
     config.showsCursor = false
     config.captureResolution = .best
+    let win = content.windows.first(where: { $0.windowID == windowId })
 
     if mode == "window" {
-        guard let id = front?.windowId,
-              let win = content.windows.first(where: { $0.windowID == id }) else { throw HelperError.noWindow }
+        guard let win else { throw HelperError.noWindow }
         let filter = SCContentFilter(desktopIndependentWindow: win)
         let scale = CGFloat(filter.pointPixelScale)
         config.width = Int(win.frame.width * scale)
@@ -96,14 +107,15 @@ func capture(mode: String, front: FrontWindow?) async throws -> CGImage {
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 
-    // Pick the display containing the front window's centre, else the first one.
+    // Pick the display containing the window's centre, else the first one.
     var display = content.displays.first
-    if let id = front?.windowId, let win = content.windows.first(where: { $0.windowID == id }) {
+    if let win {
         let centre = CGPoint(x: win.frame.midX, y: win.frame.midY)
         display = content.displays.first(where: { $0.frame.contains(centre) }) ?? display
     }
     guard let display else { throw HelperError.noDisplay }
-    let filter = SCContentFilter(display: display, excludingWindows: [])
+    let hidden = content.windows.filter { exclude.contains($0.windowID) }
+    let filter = SCContentFilter(display: display, excludingWindows: hidden)
     let scale = CGFloat(filter.pointPixelScale)
     config.width = Int(CGFloat(display.width) * scale)
     config.height = Int(CGFloat(display.height) * scale)
@@ -211,22 +223,22 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
         case "requestPermission":
             return ["ok": true, "granted": CGRequestScreenCaptureAccess()]
 
-        case "frontmost":
-            return ["ok": true].merging(frontDict(frontWindow())) { a, _ in a }
+        case "windows":
+            return ["ok": true, "windows": windowList().map(windowDict)]
 
         case "capture":
             guard CGPreflightScreenCaptureAccess() else { throw HelperError.noPermission }
             let mode = req["mode"] as? String ?? "window"
             let threshold = req["threshold"] as? Double ?? 0.02
             let force = req["force"] as? Bool ?? false
-            let front = frontWindow()
+            guard let windowId = req["windowId"] as? Int else { throw HelperError.noWindow }
+            let exclude = Set((req["excludeWindowIds"] as? [Int] ?? []).map { CGWindowID($0) })
             let t0 = Date()
-            let image = try await capture(mode: mode, front: front)
+            let image = try await capture(mode: mode, windowId: CGWindowID(windowId), exclude: exclude)
             let thumb = thumbnail(image)
             let ratio = changeRatio(thumb, lastReadThumb)
             var out: [String: Any] = ["ok": true, "changeRatio": ratio,
                                       "width": image.width, "height": image.height]
-            out.merge(frontDict(front)) { a, _ in a }
             if !force && ratio < threshold {
                 out["skipped"] = true
                 return out
