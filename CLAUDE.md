@@ -27,4 +27,5 @@ I'm a beginner building this to learn.
 
 ## Where we left off
 - 2026-10-02: Stage 1 done (math symbol fix-ups for ∈ ℕ ∀ added). Old private transcript deleted.
-- 2026-10-02: **Stage 2 built**: menu bar app (tray icon, start popup, pause/resume/end, auto-pause on lock/sleep, History window), SQLite sessions + chunks. Type checks, build and 20 tests pass; smoke tests confirmed both windows render, and a real app session (start → pause → resume → end) saved correct study time. Not yet verified by the user, and no passages were saved in my test because VS Code (this project) was in front. Waiting on the user to try `npm run dev` with a real session. Next: Stage 3 (summary + quiz, needs Ollama; also add the vision-model math pass, option A).
+- 2026-10-02: **Stage 2 done.** User ran real sessions in the app (CS 135 46 s, MATH 135 6.5 min): both ended cleanly, 2 and 8 chunks from Chrome, 0 errors, ~0.4 s per read. Pause/Resume only verified in my smoke test. User finds symbol recognition poor (Σ, Greek, √, exponents); fix is the vision-model math pass (option A) in Stage 3. History is mainly a capture check until Stage 3/5/6 add summaries, sources and delete controls.
+- Next: Stage 3 (summary + quiz). Needs Ollama + a multimodal model + an embedding model: check Ollama's library, recommend models with sizes, and ask before installing.
