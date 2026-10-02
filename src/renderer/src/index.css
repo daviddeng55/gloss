@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+/* Text you might want to copy (notes, goals) stays selectable. */
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* Drag the History window by its top bar (the title bar is hidden). */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}

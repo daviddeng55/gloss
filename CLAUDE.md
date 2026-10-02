@@ -20,7 +20,11 @@ I'm a beginner building this to learn.
 ## Project notes
 - Node 26 runs `.ts` files directly (no build step); `npm run typecheck` checks types. Avoid TS-only runtime syntax (enums, constructor parameter properties).
 - `helper/vision-helper.swift` is compiled with the Command Line Tools (`npm run build:helper`) into `bin/` (gitignored). It captures in memory with ScreenCaptureKit and reads text with Vision; Node talks to it via JSON lines (`src/helper.ts`).
-- `sessions/` holds transcripts and is gitignored (personal data).
+- `sessions/` holds terminal-session transcripts and is gitignored (personal data).
+- App: electron-vite (vite 7; electron-vite 5 doesn't support vite 8). Database is Node's built-in `node:sqlite` (works in Electron 44, so no better-sqlite3). Preload is built as CommonJS (sandboxed).
+- Dev checks: `STUDY_BUDDY_DB=<temp.db> STUDY_BUDDY_SMOKE=<dir> npx electron-vite preview` screenshots both windows; `STUDY_BUDDY_SMOKE_SESSION=<seconds>` records a real session with a pause. Always use a throwaway `STUDY_BUDDY_DB`.
+- Launched from a terminal, the app inherits that terminal app's Screen Recording permission.
 
 ## Where we left off
-- 2026-10-02: **Stage 1 done** (user accepted after a ~1-minute real session in the MATH 135 slides: correct labels, no VS Code/private text, reads cleanly; a full 10-minute run and laptop responsiveness weren't checked). Known limits: superscripts/subscripts are lost in math (5^(k-1) reads "5k-1"), Stage 4 sends images so it's unaffected; private windows only caught by title. Deleted the 14:12 transcript (private LinkedIn/Gmail text) at the user's request. Math fix options proposed (vision-model math pass vs. superscript-position trick); awaiting the user's choice. Next: Stage 2 (menu bar app) — ask before installing Electron/React/Tailwind/better-sqlite3.
+- 2026-10-02: Stage 1 done (math symbol fix-ups for ∈ ℕ ∀ added). Old private transcript deleted.
+- 2026-10-02: **Stage 2 built**: menu bar app (tray icon, start popup, pause/resume/end, auto-pause on lock/sleep, History window), SQLite sessions + chunks. Type checks, build and 20 tests pass; smoke tests confirmed both windows render, and a real app session (start → pause → resume → end) saved correct study time. Not yet verified by the user, and no passages were saved in my test because VS Code (this project) was in front. Waiting on the user to try `npm run dev` with a real session. Next: Stage 3 (summary + quiz, needs Ollama; also add the vision-model math pass, option A).

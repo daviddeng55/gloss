@@ -122,7 +122,7 @@ test("this project's own editor/terminal windows are skipped, other VS Code fold
 });
 
 test("never-record list blocks Gmail, LinkedIn and the Claude app", () => {
-  const list = loadNeverRecord(new URL("../never-record.json", import.meta.url).pathname);
+  const list = loadNeverRecord(new URL("../../never-record.json", import.meta.url).pathname);
   assert.ok(blockedReason(win({ title: "Inbox (4,566) - student@example.com - Gmail" }), list, "nook"));
   assert.ok(blockedReason(win({ title: "(21) Messaging | LinkedIn" }), list, "nook"));
   assert.ok(blockedReason(win({ app: "Claude", bundleId: "com.anthropic.claudefordesktop", title: "Claude" }), list, "nook"));

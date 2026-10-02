@@ -6,3 +6,4 @@ bin/
 *.png
 sessions/
 .DS_Store
+out/

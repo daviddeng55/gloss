@@ -6,6 +6,24 @@ A study partner on my Mac. See `PRD.md` for the plan.
 - Never start a session during a test, quiz or exam.
 - Check each course's rules about AI tools and follow them.
 
+## The menu bar app (Stage 2)
+
+```sh
+npm install              # once
+npm run build:helper     # once, and after changing helper/vision-helper.swift
+npm run dev              # starts Study Buddy in the menu bar (keep this terminal open)
+```
+
+Click the book icon in the menu bar → **Start Session…** → pick a course, optionally type a goal → **Start**.
+While recording, the icon turns red and shows your study time. The menu has **Pause/Resume**, **End Session**
+and **History…**. Sessions pause automatically while the screen is locked or the Mac sleeps.
+
+Sessions and their text are saved in `~/Library/Application Support/Study Buddy/study-buddy.db`.
+Courses come from `courses.json` (edit it to add or rename courses).
+
+Screen Recording: started from a terminal, the app uses that terminal app's permission (e.g. VS Code).
+If it asks for permission, follow the steps in the popup.
+
 ## Stage 1 — session capture (terminal)
 
 ```sh
@@ -36,4 +54,12 @@ Check how well text recognition reads a page (e.g. math notes):
 npm run ocr-test -- ~/Desktop/notes.png
 ```
 
-Other: `npm run typecheck`, `npm test`.
+Other: `npm run typecheck`, `npm test`, `npm run build`.
+
+## Project layout
+- `src/core` — capture loop, text cleaning, chunking, database (shared by the app and the terminal command)
+- `src/main` — the app's main process (menu bar, sessions, windows)
+- `src/preload` — the safe bridge between windows and the main process
+- `src/renderer` — the windows (React + Tailwind): start popup and History
+- `src/cli` — terminal commands (`npm run session`, `npm run ocr-test`)
+- `helper/vision-helper.swift` — screen capture + Apple text recognition

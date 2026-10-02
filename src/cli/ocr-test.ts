@@ -5,7 +5,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { VisionHelper, type OcrOptions } from "./helper.ts";
+import { VisionHelper, type OcrOptions } from "../core/helper.ts";
 
 const paths = process.argv.slice(2);
 if (paths.length === 0) {
@@ -20,7 +20,7 @@ const variants: { label: string; opts: OcrOptions }[] = [
   { label: "lines engine, language correction ON", opts: { engine: "lines", languageCorrection: true } },
 ];
 
-const outDir = fileURLToPath(new URL("../sessions/ocr-tests", import.meta.url));
+const outDir = fileURLToPath(new URL("../../sessions/ocr-tests", import.meta.url));
 mkdirSync(outDir, { recursive: true });
 const helper = new VisionHelper();
 

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-export const HELPER_PATH = fileURLToPath(new URL("../bin/vision-helper", import.meta.url));
+export const HELPER_PATH = fileURLToPath(new URL("../../bin/vision-helper", import.meta.url));
 
 export type Box = { x: number; y: number; w: number; h: number }; // fractions of the image, top-left origin
 export type TextBlock = { text: string; confidence: number; box: Box };
@@ -44,13 +44,12 @@ export class VisionHelper {
   private pending = new Map<number, Pending>();
 
   /** lowPriority runs the helper at "utility" priority so text recognition doesn't hog the CPU. */
-  constructor(opts: { lowPriority?: boolean } = {}) {
-    if (!existsSync(HELPER_PATH)) {
+  constructor(opts: { lowPriority?: boolean; helperPath?: string } = {}) {
+    const path = opts.helperPath ?? HELPER_PATH;
+    if (!existsSync(path)) {
       throw new Error(`Swift helper not built. Run: npm run build:helper`);
     }
-    this.proc = opts.lowPriority
-      ? spawn("/usr/sbin/taskpolicy", ["-c", "utility", HELPER_PATH])
-      : spawn(HELPER_PATH);
+    this.proc = opts.lowPriority ? spawn("/usr/sbin/taskpolicy", ["-c", "utility", path]) : spawn(path);
     createInterface({ input: this.proc.stdout }).on("line", (line) => this.onLine(line));
     this.proc.stderr.on("data", (d) => process.stderr.write(`[vision-helper] ${d}`));
     this.proc.on("exit", (code) => {

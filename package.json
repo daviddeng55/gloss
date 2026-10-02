@@ -4,17 +4,38 @@
   "description": "A study partner on my Mac",
   "scripts": {
     "build:helper": "mkdir -p bin && swiftc -O -swift-version 5 helper/vision-helper.swift -o bin/vision-helper",
-    "session": "node src/session.ts",
-    "ocr-test": "node src/ocr-test.ts",
-    "typecheck": "tsc",
-    "test": "node --test src/*.test.ts"
+    "session": "node src/cli/session.ts",
+    "ocr-test": "node src/cli/ocr-test.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.web.json",
+    "test": "node --test src/**/*.test.ts",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview"
   },
   "author": "",
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.4",
-    "typescript": "^7.0.2"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.5.1",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6"
   },
-  "private": true
+  "private": true,
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  },
+  "productName": "Study Buddy",
+  "main": "./out/main/index.js"
 }
