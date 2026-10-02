@@ -1,0 +1,8 @@
+node_modules/
+dist/
+bin/
+.env
+.env.*
+*.png
+sessions/
+.DS_Store
