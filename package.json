@@ -1,0 +1,20 @@
+{
+  "name": "study-buddy",
+  "version": "1.0.0",
+  "description": "A study partner on my Mac",
+  "scripts": {
+    "build:helper": "mkdir -p bin && swiftc -O -swift-version 5 helper/vision-helper.swift -o bin/vision-helper",
+    "session": "node src/session.ts",
+    "ocr-test": "node src/ocr-test.ts",
+    "typecheck": "tsc",
+    "test": "node --test src/*.test.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2"
+  },
+  "private": true
+}

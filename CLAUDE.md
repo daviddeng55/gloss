@@ -17,5 +17,10 @@ I'm a beginner building this to learn.
 - **Commit to git** after each working feature.
 - Keep the short "Where we left off" note at the bottom of this file up to date.
 
+## Project notes
+- Node 26 runs `.ts` files directly (no build step); `npm run typecheck` checks types. Avoid TS-only runtime syntax (enums, constructor parameter properties).
+- `helper/vision-helper.swift` is compiled with the Command Line Tools (`npm run build:helper`) into `bin/` (gitignored). It captures in memory with ScreenCaptureKit and reads text with Vision; Node talks to it via JSON lines (`src/helper.ts`).
+- `sessions/` holds transcripts and is gitignored (personal data).
+
 ## Where we left off
-- 2026-10-02: Created CLAUDE.md. Stage 1 (session capture) not started — waiting on approval of the text-recognition approach and installs.
+- 2026-10-02: Stage 1 built (capture → change check → text recognition → clean/dedupe → redact → transcript). Type checks and unit tests pass. Waiting on the user to grant Screen Recording to VS Code, run a real 10-minute session, and run `ocr-test` on a MATH 135 notes screenshot. Not yet verified with live screen capture.

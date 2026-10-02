@@ -1,0 +1,22 @@
+{
+  "_comment": "Checked before every capture. Apps match the bundle ID or app name exactly; titles are case-insensitive regular expressions matched against the window title.",
+  "apps": [
+    "com.1password.1password",
+    "com.agilebits.onepassword7",
+    "com.bitwarden.desktop",
+    "com.apple.keychainaccess",
+    "com.apple.Passwords",
+    "com.apple.MobileSMS",
+    "com.apple.loginwindow",
+    "com.apple.ScreenSaver.Engine"
+  ],
+  "titles": [
+    "private browsing",
+    "incognito",
+    "inprivate",
+    "online banking",
+    "\\b(rbc|td|bmo|cibc|scotiabank|tangerine|wealthsimple|simplii|desjardins)\\b.*\\b(bank|banking|sign in|login|accounts?)\\b",
+    "\\bpassword manager\\b",
+    "\\bsign in\\b.*\\bpassword\\b"
+  ]
+}
