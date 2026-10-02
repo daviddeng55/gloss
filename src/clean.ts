@@ -34,7 +34,12 @@ export function isNoiseLine(line: string): boolean {
   if (alnum < 4 && !MATH_SIGN.test(t)) return true;
   // Garbled recognition, e.g. "22[ +1 = 2[2[[[3]" = 10 •51 [ =]": lots of stray brackets or #.
   if ((t.match(/[[\]{}#]/g) ?? []).length >= 4) return true;
-  const lower = t.toLowerCase().replace(/[.:…>›»]+$/, "").trim();
+  // Ignore leading bullets/dashes and trailing dropdown arrows ("- Automatic Zoom v").
+  const lower = t
+    .toLowerCase()
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/(\s+[v⌄˅▾]|[.:…>›»])+$/u, "")
+    .trim();
   if (UI_WORDS.has(lower) || BROWSER_CHROME.test(lower)) return true;
   // PDF viewer toolbar: page counter "6 / 36" or zoom "100%" with hardly any words around it.
   const letters = (t.match(/\p{L}/gu) ?? []).length;

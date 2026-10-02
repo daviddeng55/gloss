@@ -99,11 +99,22 @@ const stats = {
 };
 
 let stopping = false;
+let finished = false;
+// Ctrl+C once: finish the current capture, then save. Twice, or closing the terminal: save right away.
 process.on("SIGINT", () => {
-  if (stopping) process.exit(130);
+  if (stopping) {
+    finishSession();
+    process.exit(130);
+  }
   stopping = true;
   console.log("\nEnding session…");
 });
+for (const sig of ["SIGHUP", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    finishSession();
+    process.exit(0);
+  });
+}
 
 console.log(`Recording ${course.name} for ${minutes} min (Ctrl+C to end early).`);
 console.log(`Transcript: ${transcript.mdPath}\n`);
@@ -179,27 +190,33 @@ while (!stopping && Date.now() < endAt) {
   for (let t = 0; t < wait && !stopping; t += 250) await sleep(Math.min(250, wait - t));
 }
 
-helper.close();
-const endedAt = new Date();
-const mins = (endedAt.getTime() - startedAt.getTime()) / 60_000;
-transcript.finish({
-  Length: `${mins.toFixed(1)} min`,
-  "Capture checks": stats.ticks,
-  "Read (screen changed)": stats.readOk,
-  "Skipped — unchanged": stats.unchanged,
-  "Skipped — never-record list or this project": stats.neverRecord,
-  "Discarded — window changed mid-capture": stats.changedMidCapture,
-  Errors: stats.errors,
-  "Average read time": stats.readOk ? `${Math.round(stats.ocrMsTotal / stats.readOk)} ms` : "—",
-  "Lines recognised": stats.linesIn,
-  "Lines kept": stats.kept,
-  "Lines dropped as repeats": stats.duplicate,
-  "Lines dropped as noise": stats.noise,
-  Redactions: stats.redactions,
-});
-console.log(`
+finishSession();
+
+function finishSession() {
+  if (finished) return;
+  finished = true;
+  helper.close();
+  const endedAt = new Date();
+  const mins = (endedAt.getTime() - startedAt.getTime()) / 60_000;
+  transcript.finish({
+    Length: `${mins.toFixed(1)} min`,
+    "Capture checks": stats.ticks,
+    "Read (screen changed)": stats.readOk,
+    "Skipped — unchanged": stats.unchanged,
+    "Skipped — never-record list or this project": stats.neverRecord,
+    "Discarded — window changed mid-capture": stats.changedMidCapture,
+    Errors: stats.errors,
+    "Average read time": stats.readOk ? `${Math.round(stats.ocrMsTotal / stats.readOk)} ms` : "—",
+    "Lines recognised": stats.linesIn,
+    "Lines kept": stats.kept,
+    "Lines dropped as repeats": stats.duplicate,
+    "Lines dropped as noise": stats.noise,
+    Redactions: stats.redactions,
+  });
+  console.log(`
 Session saved (${mins.toFixed(1)} min).
   Transcript: ${transcript.mdPath}
   Data:       ${transcript.jsonlPath}
   ${stats.readOk} reads · ${stats.unchanged} unchanged · ${stats.neverRecord} skipped (private/own windows) · ${stats.errors} errors
   ${stats.kept} lines kept · ${stats.duplicate} repeats dropped · ${stats.noise} noise dropped`);
+}

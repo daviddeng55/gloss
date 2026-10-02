@@ -13,7 +13,7 @@ const block = (text: string, y = 0.3, x = 0.1, h = 0.03, confidence = 0.9): Text
 
 test("drops UI noise but keeps short math", () => {
   for (const s of ["File", "Edit", "Share", "12:45 PM", "87%", "•", "learn.uwaterloo.ca/d2l/home", "Sign in",
-    "inG", "D2L", "10 c*", "| º9", "PM", "Ask Gemini", "All Bookmarks", "of 21", "6 / 36 - 1009 ç", "_ - 100% + O", "6 / 36 = 100% ÷ ∞ æ", "22[ +1 = 2[2[[[3]\" = 10 •51 [ =] [5[2 []0e2"]) {
+    "inG", "D2L", "10 c*", "| º9", "PM", "Ask Gemini", "- Automatic Zoom v", "All Bookmarks", "of 21", "6 / 36 - 1009 ç", "_ - 100% + O", "6 / 36 = 100% ÷ ∞ æ", "22[ +1 = 2[2[[[3]\" = 10 •51 [ =] [5[2 []0e2"]) {
     assert.ok(isNoiseLine(s), s);
   }
   for (const s of ["x = 1", "Proof.", "a | b", "n(n+1)/2", "Lecture 7: Induction", "1/2 + 1/4 = 3/4", "Grade: 85% of marks"]) {
