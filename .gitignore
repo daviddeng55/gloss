@@ -7,3 +7,4 @@ bin/
 sessions/
 .DS_Store
 out/
+!resources/*.png
