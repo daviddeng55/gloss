@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { TextCleaner } from "./clean.ts";
 import { VisionHelper } from "./helper.ts";
 import { blockedReason, loadNeverRecord, pickFrontWindow } from "./privacy.ts";
+import { fixMath } from "./mathfix.ts";
 import { redact } from "./redact.ts";
 import { TranscriptWriter } from "./transcript.ts";
 
@@ -96,6 +97,7 @@ const stats = {
   duplicate: 0,
   kept: 0,
   redactions: 0,
+  mathFixes: 0,
 };
 
 let stopping = false;
@@ -172,7 +174,9 @@ while (!stopping && Date.now() < endAt) {
         stats.duplicate += c.duplicate;
         stats.kept += c.kept;
         if (paragraphs.length) {
-          const red = redact(paragraphs.join("\n\n"));
+          const fixed = fixMath(paragraphs.join("\n\n"));
+          stats.mathFixes += fixed.count;
+          const red = redact(fixed.text);
           stats.redactions += red.count;
           transcript.add({ capturedAt: new Date().toISOString(), app: front.app, title: front.title, text: red.text });
         }
@@ -211,6 +215,7 @@ function finishSession() {
     "Lines kept": stats.kept,
     "Lines dropped as repeats": stats.duplicate,
     "Lines dropped as noise": stats.noise,
+    "Math symbols fixed (∈ ℕ ∀ …)": stats.mathFixes,
     Redactions: stats.redactions,
   });
   console.log(`

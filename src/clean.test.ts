@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { TextCleaner, groupLines, isNoiseLine, lineKey, similarKeys } from "./clean.ts";
 import type { TextBlock, WindowInfo } from "./helper.ts";
 import { blockedReason, isOwnWindow, loadNeverRecord, pickFrontWindow } from "./privacy.ts";
+import { fixMath } from "./mathfix.ts";
 import { redact } from "./redact.ts";
 
 const block = (text: string, y = 0.3, x = 0.1, h = 0.03, confidence = 0.9): TextBlock => ({
@@ -126,4 +127,23 @@ test("never-record list blocks Gmail, LinkedIn and the Claude app", () => {
   assert.ok(blockedReason(win({ title: "(21) Messaging | LinkedIn" }), list, "nook"));
   assert.ok(blockedReason(win({ app: "Claude", bundleId: "com.anthropic.claudefordesktop", title: "Claude" }), list, "nook"));
   assert.equal(blockedReason(win({ title: "Lecture 11 - Strong Induction - MATH 135 - LEARN" }), list, "nook"), null);
+});
+
+test("math fix-ups: ∈, ℕ and ∀ from real misreads", () => {
+  const cases: [string, string][] = [
+    ["(2) Vn E N, P(1) ^...^P(k)→ P(k+1)", "(2) ∀n ∈ ℕ, P(1) ^...^P(k)→ P(k+1)"],
+    ["(3) For all n e N, P(n).", "(3) For all n ∈ ℕ, P(n)."],
+    ['n E N, P(n)":', 'n ∈ ℕ, P(n)":'],
+    ["Suppose | am trying to prove Vn € N, P(n) by strong", "Suppose | am trying to prove ∀n ∈ ℕ, P(n) by strong"],
+    ["For all a, b e Z, if a | b", "For all a, b ∈ ℤ, if a | b"],
+    ["n EN", "n ∈ ℕ"],
+    ["Let x e R.", "Let x ∈ ℝ."],
+  ];
+  for (const [input, want] of cases) assert.equal(fixMath(input).text, want);
+});
+
+test("math fix-ups leave ordinary text alone", () => {
+  for (const s of ["I have a e Notebook", "Grade E N/A", "Room E C", "We need e Recursion", "Value 3 e N", "Vacation in Venice", "The answer is in Room 3"]) {
+    assert.equal(fixMath(s).text, s);
+  }
 });
