@@ -156,7 +156,7 @@ export async function summarizeSession(
         role: "user",
         content: `Below are numbered passages of ${course} notes captured from the student's screen during one study session, in the order they were seen.${goal ? ` The student's goal was: "${goal}".` : ""}
 
-List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads).
+List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Keep math short and simple; plain notation like (x+y)/2 or sqrt(xy) is fine. Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads).
 If the passages are too garbled or unrelated to the course to summarize honestly, set "enough" to false, explain why in "reason", and return no points. Otherwise set "enough" to true and "reason" to "".
 
 ${text}`,
@@ -223,27 +223,32 @@ type RawQuestion = {
   source: number;
 };
 
+/** LaTeX written without $...$ won't display as math, so wrap it. Exported for tests. */
+export function ensureMathDelimiters(text: string): string {
+  return /\\[a-zA-Z]+/.test(text) && !text.includes("$") ? `$${text}$` : text;
+}
+
 /** Keeps only well-formed questions. Exported for tests. */
 export function validateQuestions(raw: RawQuestion[], used: Passage[]): QuizDraft[] {
   const out: QuizDraft[] = [];
   const seen = new Set<string>();
   for (const q of raw ?? []) {
-    const question = q.question?.trim();
+    const question = ensureMathDelimiters(q.question?.trim() ?? "");
     if (!question || seen.has(question.toLowerCase())) continue;
     if (!(q.source >= 1 && q.source <= used.length)) continue;
     const passageId = used[q.source - 1].id;
     if (q.type === "multiple_choice") {
-      const options = (q.options ?? []).map((o) => String(o).trim()).filter(Boolean);
+      const options = (q.options ?? []).map((o) => ensureMathDelimiters(String(o).trim())).filter(Boolean);
       if (options.length < 3 || options.length > 5 || new Set(options).size !== options.length) continue;
       // The correct option: by index (0- or 1-based), else by matching the answer text.
       let idx = typeof q.correct_option === "number" ? q.correct_option : -1;
       if (!(idx >= 0 && idx < options.length) && idx === options.length) idx -= 1;
-      const byText = options.findIndex((o) => o.toLowerCase() === q.answer?.trim().toLowerCase());
+      const byText = options.findIndex((o) => o.toLowerCase() === ensureMathDelimiters(q.answer?.trim() ?? "").toLowerCase());
       if (byText >= 0) idx = byText;
       if (!(idx >= 0 && idx < options.length)) continue;
       out.push({ type: "multiple_choice", question, options, answer: options[idx], passageId });
     } else if (q.type === "short_answer") {
-      const answer = q.answer?.trim();
+      const answer = ensureMathDelimiters(q.answer?.trim() ?? "");
       if (!answer) continue;
       out.push({ type: "short_answer", question, answer, passageId });
     } else continue;
@@ -273,7 +278,7 @@ export async function makeQuiz(
         role: "user",
         content: `Below are numbered passages of ${course} notes the student studied in one session.
 
-Write a quiz of 6 questions (at least 2 "multiple_choice" and at least 2 "short_answer") that checks understanding of this material.
+Write a quiz of 8 questions (at least 3 "multiple_choice" and at least 3 "short_answer") that checks understanding of this material.
 - Every question must be answerable from ONE passage alone; put its number in "source".
 - Test ideas that matter (definitions, why a step works, what a result says), not trivia like page numbers or window titles.
 - multiple_choice: 4 "options", exactly one correct; "correct_option" is its index starting at 0; "answer" is the correct option's text. Wrong options should be plausible.
@@ -292,6 +297,71 @@ ${text}`,
     return { ok: false, reason: "The AI couldn't make enough good questions from this session's text." };
   }
   return { ok: true, questions };
+}
+
+// ---------- checking questions ----------
+
+const VERIFY_SCHEMA = {
+  type: "object",
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { number: { type: "integer" }, keep: { type: "boolean" }, problem: { type: "string", maxLength: 120 } },
+        required: ["number", "keep", "problem"],
+      },
+    },
+  },
+  required: ["results"],
+};
+
+/**
+ * A second, stricter pass: the model checks each question against its source passage and we drop
+ * any it can't fully support (wrong answer, unanswerable, nonsense, garbled). Small models write
+ * plausible-looking but wrong questions, so this is how "never make things up" holds for quizzes.
+ */
+export async function verifyQuestions(
+  questions: QuizDraft[],
+  passages: Passage[],
+  cfg: AiConfig = DEFAULT_AI,
+): Promise<{ kept: QuizDraft[]; dropped: { question: string; problem: string }[] }> {
+  const byId = new Map(passages.map((p) => [p.id, p]));
+  const list = questions
+    .map((q, i) => {
+      const opts = q.options ? `\nOptions: ${q.options.map((o, j) => `(${j + 1}) ${o}`).join("  ")}` : "";
+      return `### Question ${i + 1}\nPassage:\n${byId.get(q.passageId)?.text ?? ""}\n\nQuestion: ${q.question}${opts}\nGiven answer: ${q.answer}`;
+    })
+    .join("\n\n");
+  const out = await chat<{ results: { number: number; keep: boolean; problem: string }[] }>(cfg, {
+    numCtx: 16_384,
+    timeoutMs: 240_000,
+    temperature: 0,
+    schema: VERIFY_SCHEMA,
+    messages: [
+      {
+        role: "user",
+        content: `You are checking quiz questions written from course notes. For each question, set "keep" to true ONLY if all of these hold:
+1. The question makes sense and is clearly worded.
+2. The passage alone contains what's needed to answer it.
+3. The given answer is correct according to the passage (check any math carefully).
+4. For multiple choice, exactly one option is correct.
+Otherwise set "keep" to false. "problem": at most 15 words saying what's wrong ("" if kept). Don't explain your reasoning.
+Return one result per question, with its number.
+
+${list}`,
+      },
+    ],
+  });
+  const verdict = new Map((out.results ?? []).map((r) => [r.number, r]));
+  const kept: QuizDraft[] = [];
+  const dropped: { question: string; problem: string }[] = [];
+  questions.forEach((q, i) => {
+    const v = verdict.get(i + 1);
+    if (v?.keep) kept.push(q);
+    else dropped.push({ question: q.question, problem: v?.problem || "not checked" });
+  });
+  return { kept, dropped };
 }
 
 // ---------- marking ----------

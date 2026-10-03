@@ -1,16 +1,8 @@
 // History window: sessions grouped by course on the left, the selected session's notes on the right.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AppState, Course, SessionDetail, SessionRow } from "../../shared/types.ts";
-
-const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-
-function duration(ms: number): string {
-  const min = Math.round(ms / 60_000);
-  if (min < 1) return "< 1 min";
-  if (min < 60) return `${min} min`;
-  return `${Math.floor(min / 60)} h ${min % 60} min`;
-}
+import { dateFmt, duration, timeFmt } from "./format.ts";
+import Rich from "./Rich.tsx";
 
 export default function History() {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -29,7 +21,12 @@ export default function History() {
 
   useEffect(() => {
     void refresh();
-    return window.api.onState(() => void refresh());
+    const offState = window.api.onState(() => void refresh());
+    const offReview = window.api.onReview(() => void refresh()); // a summary or score changed
+    return () => {
+      offState();
+      offReview();
+    };
   }, [refresh]);
 
   const liveId = state.status === "idle" ? null : state.sessionId;
@@ -124,6 +121,37 @@ function SessionView({ s, courseName, live }: { s: SessionDetail; courseName: st
             <span className="font-medium">Goal:</span> {s.goal}
           </p>
         ) : null}
+        {!live && s.chunkCount > 0 ? (
+          <div className="mt-4 rounded-xl border border-black/10 p-4 dark:border-white/15">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold">Summary &amp; quiz</h3>
+              <div className="flex items-center gap-3">
+                {s.quizScore ? (
+                  <span className="text-neutral-500 tabular-nums dark:text-neutral-400">
+                    Quiz: {s.quizScore.correct}/{s.quizScore.total}
+                  </span>
+                ) : null}
+                <button
+                  onClick={() => void window.api.openReview(s.id)}
+                  className="rounded-lg bg-blue-600 px-3 py-1 font-medium text-white hover:bg-blue-700"
+                >
+                  {s.summary ? "Open" : "Make summary & quiz"}
+                </button>
+              </div>
+            </div>
+            {s.summary?.ok ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {s.summary.points.map((p, i) => (
+                  <li key={i}>
+                    <Rich text={p.text} />
+                  </li>
+                ))}
+              </ul>
+            ) : s.summary ? (
+              <p className="mt-2 text-neutral-500">{s.summary.reason}</p>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       {s.chunks.length === 0 ? (
@@ -138,7 +166,7 @@ function SessionView({ s, courseName, live }: { s: SessionDetail; courseName: st
                 <span className="tabular-nums">{timeFmt.format(new Date(c.capturedAt))}</span> · {c.sourceApp}
                 {c.sourceTitle ? ` — ${c.sourceTitle}` : ""}
               </p>
-              <p className="selectable leading-relaxed whitespace-pre-wrap">{c.text}</p>
+              <Rich text={c.text} keepLines />
             </li>
           ))}
         </ol>

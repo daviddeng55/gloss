@@ -18,7 +18,19 @@ Click the book icon in the menu bar → **Start Session…** → pick a course, 
 While recording, the icon turns red and shows your study time. The menu has **Pause/Resume**, **End Session**
 and **History…**. Sessions pause automatically while the screen is locked or the Mac sleeps.
 
+When you **End Session**, a review window opens: first a summary of what you covered (about a minute),
+then a quiz of about 5 questions (about 2 more minutes). Multiple choice is marked instantly; short answers
+are marked by the AI against your notes. Every summary point and question links to the notes it came from.
+Reopen any session's review from History.
+
+For MATH courses (`"math": true` in `courses.json`), new formulas on screen are also re-read by the AI
+model from a cropped screenshot (at most every 45 s), which fixes symbols Apple's text recognition misreads.
+
 Sessions and their text are saved in `~/Library/Application Support/Study Buddy/study-buddy.db`.
+
+### AI (Ollama)
+The AI runs on your Mac through [Ollama](https://ollama.com) — nothing is sent online.
+Ollama must be running (it lives in the menu bar) with the model downloaded: `ollama pull qwen3.5:4b`.
 Courses come from `courses.json` (edit it to add or rename courses).
 
 Screen Recording: started from a terminal, the app uses that terminal app's permission (e.g. VS Code).

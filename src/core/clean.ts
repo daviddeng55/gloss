@@ -153,11 +153,11 @@ export class TextCleaner {
     this.opts = opts;
   }
 
-  /** Returns the paragraphs worth keeping from one capture, in reading order. */
+  /** Returns the paragraphs worth keeping from one capture, in reading order, and where each one is. */
   clean(
     blocks: TextBlock[],
     win: { bundleId: string; height: number } = { bundleId: "", height: 0 },
-  ): { paragraphs: string[]; stats: CleanStats } {
+  ): { paragraphs: string[]; boxes: TextBlock["box"][]; stats: CleanStats } {
     const stats: CleanStats = { linesIn: 0, noise: 0, duplicate: 0, kept: 0 };
 
     let usable = blocks.filter((b) => {
@@ -183,6 +183,7 @@ export class TextCleaner {
     if (this.opts.engine === "lines") usable = groupLines(usable);
 
     const paragraphs: string[] = [];
+    const boxes: TextBlock["box"][] = [];
     const thisCapture = new Set<string>();
     for (const block of usable) {
       const lines = block.text
@@ -206,10 +207,11 @@ export class TextCleaner {
       }
       if (keep.length) {
         paragraphs.push(keep.join("\n"));
+        boxes.push(block.box);
         stats.kept += keep.length;
       }
     }
-    return { paragraphs, stats };
+    return { paragraphs, boxes, stats };
   }
 
   private hasSeen(line: string): boolean {

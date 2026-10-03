@@ -2,7 +2,8 @@
 // Lives in the app's data folder: ~/Library/Application Support/Study Buddy/study-buddy.db
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { ChunkRow, SessionDetail, SessionRow } from "../shared/types.ts";
+import type { ChunkRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
+import type { Passage, QuizDraft } from "./ai.ts";
 import type { NewChunk } from "./chunker.ts";
 
 // Each entry upgrades the database by one version. Never edit a released entry; add a new one.
@@ -32,6 +33,26 @@ const MIGRATIONS = [
    CREATE INDEX chunks_session ON chunks(session_id, captured_at);
    CREATE INDEX chunks_course ON chunks(course_id, captured_at);
    CREATE INDEX sessions_course ON sessions(course_id, started_at);`,
+  // 2: Stage 3 — quizzes. sessions.summary holds the summary as JSON.
+  `CREATE TABLE quiz_items (
+     id            TEXT PRIMARY KEY,
+     course_id     TEXT NOT NULL,
+     session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     chunk_id      TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+     position      INTEGER NOT NULL,
+     type          TEXT NOT NULL,              -- multiple_choice | short_answer
+     question      TEXT NOT NULL,
+     options       TEXT,                       -- JSON array, multiple choice only
+     answer        TEXT NOT NULL,
+     created_at    TEXT NOT NULL,
+     next_due_at   TEXT,                       -- spaced review (Stage 5)
+     interval_days INTEGER,
+     history       TEXT NOT NULL DEFAULT '[]', -- JSON [{at, correct, response}]
+     explanation   TEXT                        -- feedback on the latest wrong answer
+   );
+   CREATE INDEX quiz_session ON quiz_items(session_id, position);
+   CREATE INDEX quiz_due ON quiz_items(course_id, next_due_at);
+   ALTER TABLE sessions ADD COLUMN quiz_note TEXT; -- why no quiz could be made`,
 ];
 
 type Row = Record<string, any>;
@@ -119,6 +140,99 @@ export class StudyDb {
     return { ...toSession(s), chunks: chunks.map(toChunk) };
   }
 
+  // ---------- Stage 3: summary and quiz ----------
+
+  /** The session's text passages, in order, for the AI. */
+  getPassages(sessionId: string): Passage[] {
+    return this.db
+      .prepare("SELECT id, text, source_title AS sourceTitle FROM chunks WHERE session_id = ? ORDER BY captured_at, rowid")
+      .all(sessionId) as Passage[];
+  }
+
+  saveSummary(sessionId: string, summary: SummaryData) {
+    this.db.prepare("UPDATE sessions SET summary = ? WHERE id = ?").run(JSON.stringify(summary), sessionId);
+  }
+
+  getSummary(sessionId: string): SummaryData | null {
+    const r = this.db.prepare("SELECT summary FROM sessions WHERE id = ?").get(sessionId) as Row | undefined;
+    return r?.summary ? JSON.parse(r.summary) : null;
+  }
+
+  /** Saves a new quiz (replacing none: a session gets one quiz). */
+  saveQuiz(sessionId: string, courseId: string, questions: QuizDraft[]) {
+    const insert = this.db.prepare(
+      `INSERT INTO quiz_items (id, course_id, session_id, chunk_id, position, type, question, options, answer, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN");
+    questions.forEach((q, i) =>
+      insert.run(randomUUID(), courseId, sessionId, q.passageId, i, q.type, q.question,
+        q.options ? JSON.stringify(q.options) : null, q.answer, now),
+    );
+    this.db.prepare("UPDATE sessions SET quiz_total = ?, quiz_correct = 0, quiz_note = NULL WHERE id = ?").run(questions.length, sessionId);
+    this.db.exec("COMMIT");
+  }
+
+  saveQuizNote(sessionId: string, note: string) {
+    this.db.prepare("UPDATE sessions SET quiz_note = ? WHERE id = ?").run(note, sessionId);
+  }
+
+  getQuizNote(sessionId: string): string | null {
+    return ((this.db.prepare("SELECT quiz_note FROM sessions WHERE id = ?").get(sessionId) as Row | undefined)?.quiz_note) ?? null;
+  }
+
+  hasQuiz(sessionId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM quiz_items WHERE session_id = ? LIMIT 1").get(sessionId);
+  }
+
+  /** Quiz questions for the window. The answer is only included once the question has been answered. */
+  getQuiz(sessionId: string): QuizItemView[] {
+    const rows = this.db.prepare("SELECT * FROM quiz_items WHERE session_id = ? ORDER BY position").all(sessionId) as Row[];
+    return rows.map((r) => {
+      const history = JSON.parse(r.history) as { at: string; correct: boolean; response: string }[];
+      const first = history[0];
+      return {
+        id: r.id,
+        chunkId: r.chunk_id ?? undefined,
+        type: r.type,
+        question: r.question,
+        options: r.options ? JSON.parse(r.options) : undefined,
+        answered: first ? { response: first.response, correct: first.correct, answer: r.answer, explanation: r.explanation ?? "" } : undefined,
+      };
+    });
+  }
+
+  getQuizItem(id: string): { id: string; sessionId: string; chunkId?: string; type: string; question: string; answer: string } | null {
+    const r = this.db.prepare("SELECT * FROM quiz_items WHERE id = ?").get(id) as Row | undefined;
+    return r ? { id: r.id, sessionId: r.session_id, chunkId: r.chunk_id ?? undefined, type: r.type, question: r.question, answer: r.answer } : null;
+  }
+
+  getChunkText(id: string): string {
+    return ((this.db.prepare("SELECT text FROM chunks WHERE id = ?").get(id) as Row | undefined)?.text) ?? "";
+  }
+
+  /**
+   * Records an answer. The session score counts each question's first answer. Spaced review (used in
+   * Stage 5): wrong comes back next session; right comes back after 3 days, then 7, then 14.
+   */
+  recordAnswer(id: string, a: { correct: boolean; response: string; explanation: string; at: string }) {
+    const r = this.db.prepare("SELECT session_id, history, interval_days FROM quiz_items WHERE id = ?").get(id) as Row;
+    const history = [...JSON.parse(r.history), { at: a.at, correct: a.correct, response: a.response }];
+    const steps = [3, 7, 14];
+    const interval = a.correct ? (steps.find((d) => d > (r.interval_days ?? 0)) ?? 14) : 0;
+    const due = new Date(Date.parse(a.at) + interval * 86_400_000).toISOString();
+    this.db
+      .prepare("UPDATE quiz_items SET history = ?, interval_days = ?, next_due_at = ?, explanation = ? WHERE id = ?")
+      .run(JSON.stringify(history), interval, due, a.explanation || null, id);
+    this.db
+      .prepare(
+        `UPDATE sessions SET quiz_correct = (SELECT COUNT(*) FROM quiz_items
+           WHERE session_id = ? AND json_extract(history, '$[0].correct') = 1) WHERE id = ?`,
+      )
+      .run(r.session_id, r.session_id);
+  }
+
   close() {
     this.db.close();
   }
@@ -134,7 +248,7 @@ function toSession(r: Row): SessionRow {
     activeMs: r.active_ms,
     chunkCount: r.chunk_count,
     charCount: r.char_count,
-    summary: r.summary ?? undefined,
+    summary: r.summary ? JSON.parse(r.summary) : undefined,
     quizScore: r.quiz_total != null ? { correct: r.quiz_correct, total: r.quiz_total } : undefined,
   };
 }

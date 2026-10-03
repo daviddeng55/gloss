@@ -11,6 +11,15 @@ const api: StudyApi = {
   getSession: (id) => ipcRenderer.invoke("sessions:get", id),
   openScreenRecordingSettings: () => ipcRenderer.invoke("settings:screen-recording"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
+  getReview: (sessionId) => ipcRenderer.invoke("review:get", sessionId),
+  retryReview: (sessionId) => ipcRenderer.invoke("review:retry", sessionId),
+  answerQuestion: (itemId, response) => ipcRenderer.invoke("quiz:answer", itemId, response),
+  openReview: (sessionId) => ipcRenderer.invoke("review:open", sessionId),
+  onReview: (callback) => {
+    const listener = (_e: unknown, sessionId: string) => callback(sessionId);
+    ipcRenderer.on("review", listener);
+    return () => ipcRenderer.removeListener("review", listener);
+  },
   onState: (callback) => {
     const listener = (_e: unknown, state: AppState) => callback(state);
     ipcRenderer.on("state", listener);

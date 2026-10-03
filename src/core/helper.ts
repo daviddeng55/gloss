@@ -119,6 +119,15 @@ export class VisionHelper {
     return this.request("capture", args);
   }
 
+  /** JPEG (base64) of part of the last image read; `rect` in fractions, top-left origin. Memory only. */
+  async image(rect?: Box, maxWidth = 1400): Promise<{ jpeg: string; width: number; height: number }> {
+    return this.request("image", { rect, maxWidth });
+  }
+
+  async forgetImage(): Promise<void> {
+    await this.request("forgetImage");
+  }
+
   ocrFile(path: string, opts: OcrOptions = {}): Promise<OcrFileResult> {
     return this.request("ocrFile", { path, ...opts });
   }

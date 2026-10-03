@@ -3,7 +3,7 @@
 // read the text if it changed, clean it, fix math symbols, redact, and hand back an entry.
 import { setTimeout as sleep } from "node:timers/promises";
 import { TextCleaner } from "./clean.ts";
-import type { VisionHelper } from "./helper.ts";
+import type { Box, VisionHelper } from "./helper.ts";
 import { fixMath } from "./mathfix.ts";
 import { blockedReason, pickFrontWindow, type NeverRecord } from "./privacy.ts";
 import { redact } from "./redact.ts";
@@ -39,13 +39,39 @@ export type CaptureStats = {
   kept: number;
   redactions: number;
   mathFixes: number;
+  mathPasses: number; // screenshots of new math re-read by the AI model
+  mathLinesFixed: number;
+  mathPassMs: number;
 };
+
+/** Re-reads lines of math from a screenshot (JPEG base64); returns the corrected lines. */
+export type MathPass = (imageBase64: string, lines: string[]) => Promise<{ lines: string[]; changed: number }>;
+
+const MATH_SIGNAL = /[=<>≤≥≠±∑∫√^_&€]|\b[a-zA-Z]\s?\(|[a-zA-Z]\d|\d[a-zA-Z]/;
+
+/** A paragraph worth re-reading for math: at least a third of its lines look like formulas. */
+export function looksMathy(paragraph: string): boolean {
+  const lines = paragraph.split("\n");
+  const hits = lines.filter((l) => MATH_SIGNAL.test(l)).length;
+  return hits > 0 && hits / lines.length >= 0.34;
+}
+
+/** The smallest rectangle around all `boxes`, padded a little and kept inside the image. */
+export function unionBox(boxes: Box[], pad = 0.01): Box {
+  const x = Math.max(0, Math.min(...boxes.map((b) => b.x)) - pad);
+  const y = Math.max(0, Math.min(...boxes.map((b) => b.y)) - pad);
+  const r = Math.min(1, Math.max(...boxes.map((b) => b.x + b.w)) + pad);
+  const btm = Math.min(1, Math.max(...boxes.map((b) => b.y + b.h)) + pad);
+  return { x, y, w: r - x, h: btm - y };
+}
 
 export class CaptureLoop {
   readonly stats: CaptureStats = {
     ticks: 0, unchanged: 0, neverRecord: 0, changedMidCapture: 0, readOk: 0, errors: 0,
     ocrMsTotal: 0, linesIn: 0, noise: 0, duplicate: 0, kept: 0, redactions: 0, mathFixes: 0,
+    mathPasses: 0, mathLinesFixed: 0, mathPassMs: 0,
   };
+  private mathReadyAt = 0; // the math pass is rationed: at most once per mathCooldownMs
   private state: "idle" | "running" | "paused" | "stopped" = "idle";
   private lastSource = "";
   private activeBefore = 0; // ms of active (unpaused) time before the current run stretch
@@ -59,6 +85,8 @@ export class CaptureLoop {
     settings: CaptureSettings;
     onEntry: (entry: TranscriptEntry) => void;
     onLog?: (line: string) => void;
+    mathPass?: MathPass; // only for math courses
+    mathCooldownMs?: number;
   };
 
   constructor(opts: CaptureLoop["opts"]) {
@@ -120,6 +148,40 @@ export class CaptureLoop {
     return blockedReason(w, this.opts.neverRecord, this.opts.projectName);
   }
 
+  /**
+   * Math courses: Apple's text recognition misreads symbols, exponents and Greek letters, so new
+   * math-looking paragraphs are cropped from the screenshot and re-read by the AI model. This takes
+   * 10–30 s on a laptop, so it runs at most once per cooldown and the rest wait for the next chance.
+   * Rewrites `paragraphs` in place.
+   */
+  private async rereadMath(paragraphs: string[], boxes: Box[]) {
+    const { mathPass, helper } = this.opts;
+    if (!mathPass || Date.now() < this.mathReadyAt) return;
+    const idx = paragraphs.map((p, i) => (looksMathy(p) ? i : -1)).filter((i) => i >= 0);
+    if (idx.length === 0) return;
+    const t0 = Date.now();
+    try {
+      const { jpeg } = await helper.image(unionBox(idx.map((i) => boxes[i])));
+      const lines = idx.flatMap((i) => paragraphs[i].split("\n"));
+      const out = await mathPass(jpeg, lines);
+      // Put the corrected lines back into their paragraphs.
+      let k = 0;
+      for (const i of idx) {
+        const n = paragraphs[i].split("\n").length;
+        paragraphs[i] = out.lines.slice(k, k + n).join("\n");
+        k += n;
+      }
+      this.stats.mathPasses++;
+      this.stats.mathLinesFixed += out.changed;
+      this.log(`math pass: re-read ${lines.length} lines, fixed ${out.changed} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+    } catch (err) {
+      this.log(`math pass skipped: ${(err as Error).message}`);
+    } finally {
+      this.stats.mathPassMs += Date.now() - t0;
+      this.mathReadyAt = Date.now() + (this.opts.mathCooldownMs ?? 45_000);
+    }
+  }
+
   private async tick() {
     const { helper, settings } = this.opts;
     const stats = this.stats;
@@ -167,11 +229,12 @@ export class CaptureLoop {
       }
       stats.readOk++;
       stats.ocrMsTotal += res.ms ?? 0;
-      const { paragraphs, stats: c } = this.cleaner.clean(res.blocks ?? [], front);
+      const { paragraphs, boxes, stats: c } = this.cleaner.clean(res.blocks ?? [], front);
       stats.linesIn += c.linesIn;
       stats.noise += c.noise;
       stats.duplicate += c.duplicate;
       stats.kept += c.kept;
+      if (paragraphs.length) await this.rereadMath(paragraphs, boxes);
       if (paragraphs.length) {
         const fixed = fixMath(paragraphs.join("\n\n"));
         stats.mathFixes += fixed.count;
@@ -203,6 +266,7 @@ export function statsRows(s: CaptureStats, activeMs: number): Record<string, str
     "Lines dropped as repeats": s.duplicate,
     "Lines dropped as noise": s.noise,
     "Math symbols fixed (∈ ℕ ∀ …)": s.mathFixes,
+    "Math re-read by AI": s.mathPasses ? `${s.mathPasses} times, ${s.mathLinesFixed} lines fixed` : "—",
     Redactions: s.redactions,
   };
 }

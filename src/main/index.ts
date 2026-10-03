@@ -2,13 +2,15 @@
 // (Electron's "main process" is the hidden Node program; windows are separate "renderer" processes.)
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, screen, shell, Tray } from "electron";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { checkAi, transcribeMath } from "../core/ai.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
 import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
 import type { AppState, Course, StartResult } from "../shared/types.ts";
+import { ReviewService } from "./review.ts";
 
 const ROOT = app.getAppPath(); // the project folder while developing
 const fromRoot = (...p: string[]) => join(ROOT, ...p);
@@ -30,6 +32,8 @@ let db: StudyDb;
 let tray: Tray;
 let popup: BrowserWindow | null = null;
 let history: BrowserWindow | null = null;
+let reviewWin: BrowserWindow | null = null;
+let reviews: ReviewService;
 let current: Current | null = null;
 let lastMenuKey = "";
 
@@ -138,8 +142,12 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     db.addChunk(sessionId, courseId, chunk);
     session.chunks!++;
   });
+  // Math courses: re-read new math with the AI model (only if Ollama is ready; otherwise skip quietly).
+  const mathPass = course.math && (await checkAi()).ok ? transcribeMath : undefined;
+  if (course.math && !mathPass) console.log("[capture] math pass off: Ollama isn't ready");
   session.loop = new CaptureLoop({
     helper,
+    mathPass: mathPass && ((img, lines) => mathPass(img, lines)),
     neverRecord: loadNeverRecord(fromRoot("never-record.json")),
     projectName: basename(ROOT),
     ownPids: [process.pid], // never capture Study Buddy's own windows
@@ -179,10 +187,15 @@ async function endSession() {
   db.endSession(c.sessionId, { endedAt: new Date().toISOString(), activeMs: c.loop.activeMs, stats: c.loop.stats });
   current = null;
   broadcast();
-  new Notification({
-    title: `${c.course.name} session saved`,
-    body: `${clock(c.loop.activeMs)} studied · ${c.chunks} passage${c.chunks === 1 ? "" : "s"} of notes saved`,
-  }).show();
+  if (c.chunks > 0 && !quitting) {
+    reviews.ensure(c.sessionId); // summary, then quiz
+    openReview(c.sessionId);
+  } else {
+    new Notification({
+      title: `${c.course.name} session saved`,
+      body: `${clock(c.loop.activeMs)} studied · ${c.chunks === 0 ? "no notes were captured" : `${c.chunks} passages saved`}`,
+    }).show();
+  }
 }
 
 // ---------- windows ----------
@@ -253,6 +266,28 @@ function showHistory() {
   app.focus({ steal: true });
 }
 
+function openReview(sessionId: string) {
+  if (!reviewWin) {
+    reviewWin = new BrowserWindow({
+      width: 760,
+      height: 820,
+      minWidth: 520,
+      minHeight: 480,
+      show: false,
+      title: "Study Buddy — Review",
+      titleBarStyle: "hiddenInset",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#ffffff",
+      webPreferences: { preload, sandbox: true, contextIsolation: true },
+    });
+    reviewWin.on("closed", () => (reviewWin = null));
+    reviewWin.once("ready-to-show", () => reviewWin?.show());
+  } else {
+    reviewWin.show();
+  }
+  load(reviewWin, `review/${sessionId}`);
+  app.focus({ steal: true });
+}
+
 // ---------- IPC (requests from the windows) ----------
 
 function registerIpc() {
@@ -266,6 +301,15 @@ function registerIpc() {
   ipcMain.handle("settings:screen-recording", () =>
     shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
   );
+  ipcMain.handle("review:get", (_e, id: unknown) => reviews.get(String(id)));
+  ipcMain.handle("review:retry", (_e, id: unknown) => reviews.retry(String(id)));
+  ipcMain.handle("review:open", (_e, id: unknown) => {
+    reviews.ensure(String(id));
+    openReview(String(id));
+  });
+  ipcMain.handle("quiz:answer", (_e, itemId: unknown, response: unknown) =>
+    reviews.answer(String(itemId), typeof response === "string" ? response.slice(0, 2000) : ""),
+  );
   ipcMain.handle("window:close", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (win === popup) win?.hide();
@@ -275,12 +319,17 @@ function registerIpc() {
 
 // ---------- app lifecycle ----------
 
-if (!app.requestSingleInstanceLock()) app.quit();
+// One copy at a time, except development checks, which use a throwaway database and data folder.
+if (process.env.STUDY_BUDDY_DB) app.setPath("userData", join(dirname(process.env.STUDY_BUDDY_DB), "userdata"));
+else if (!app.requestSingleInstanceLock()) app.quit();
 
 app.whenReady().then(() => {
   app.dock?.hide(); // menu bar only, no Dock icon
   // STUDY_BUDDY_DB lets development checks use a throwaway database.
   db = new StudyDb(process.env.STUDY_BUDDY_DB ?? join(app.getPath("userData"), "study-buddy.db"));
+  reviews = new ReviewService(db, loadCourses, (sessionId) => {
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
+  });
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
@@ -313,6 +362,7 @@ app.whenReady().then(() => {
 
   if (process.env.STUDY_BUDDY_SMOKE) void smokeTest(process.env.STUDY_BUDDY_SMOKE);
   if (process.env.STUDY_BUDDY_SMOKE_SESSION) void smokeSession(Number(process.env.STUDY_BUDDY_SMOKE_SESSION));
+  if (process.env.STUDY_BUDDY_SMOKE_REVIEW) void smokeReview(process.env.STUDY_BUDDY_SMOKE_REVIEW);
 });
 
 app.on("window-all-closed", () => {
@@ -367,5 +417,36 @@ async function smokeSession(seconds: number) {
   const s = db.getSession(id)!;
   console.log("SMOKE ended", JSON.stringify({ status: getState().status, endedAt: !!s.endedAt, activeMs: s.activeMs, chunks: s.chunkCount }));
   for (const c of s.chunks) console.log("SMOKE chunk", c.sourceApp, "|", c.sourceTitle, "|", c.text.length, "chars");
+  app.quit();
+}
+
+/** Development check: makes the summary and quiz for the newest session, answers two questions, saves a screenshot. */
+async function smokeReview(dir: string) {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const id = db.listSessions()[0].id;
+  const t0 = Date.now();
+  reviews.ensure(id);
+  openReview(id);
+  let r = reviews.get(id)!;
+  while (r.quiz.status !== "done" && r.quiz.status !== "error" && Date.now() - t0 < 600_000) {
+    await wait(2000);
+    r = reviews.get(id)!;
+  }
+  console.log("SMOKE review ready in", Math.round((Date.now() - t0) / 1000), "s");
+  console.log("SMOKE summary", JSON.stringify(r.summary).slice(0, 1500));
+  console.log("SMOKE quiz", r.quiz.status, r.quiz.error ?? "", r.quiz.note ?? "", r.quiz.items.length, "questions");
+  for (const q of r.quiz.items) console.log("SMOKE   -", q.type, "|", q.question, q.options ? `| ${q.options.join(" / ")}` : "");
+  const mc = r.quiz.items.find((q) => q.type === "multiple_choice");
+  if (mc) console.log("SMOKE answer MC:", JSON.stringify(await reviews.answer(mc.id, mc.options![0])));
+  const sa = r.quiz.items.find((q) => q.type === "short_answer");
+  if (sa) {
+    const t = Date.now();
+    console.log("SMOKE answer SA (deliberately vague):", JSON.stringify(await reviews.answer(sa.id, "I'm not sure")), Math.round((Date.now() - t) / 1000), "s");
+  }
+  if (!reviewWin) openReview(id); // in case the window was closed meanwhile
+  await wait(3000);
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(dir, "review.png"), (await reviewWin!.webContents.capturePage()).toPNG());
+  console.log("SMOKE score", JSON.stringify(db.getSession(id)!.quizScore));
   app.quit();
 }

@@ -8,13 +8,17 @@
 //   {"id":3,"cmd":"windows"}                     -> on-screen windows, front to back
 //   {"id":4,"cmd":"capture","windowId":N, ...}   -> capture, compare, maybe read text
 //   {"id":5,"cmd":"ocrFile","path":"...", ...}   -> read text from an image file (for testing)
+//   {"id":6,"cmd":"image","rect":{x,y,w,h}}      -> JPEG (base64) of part of the last image read, for the math pass
+//   {"id":7,"cmd":"forgetImage"}                 -> drop the last image from memory
 //
 // Build: npm run build:helper
 
 import AppKit
 import CoreGraphics
 import Foundation
+import ImageIO
 import ScreenCaptureKit
+import UniformTypeIdentifiers
 import Vision
 
 // MARK: - JSON in/out
@@ -78,13 +82,14 @@ func windowDict(_ w: WindowInfo) -> [String: Any] {
 // MARK: - Screen capture (ScreenCaptureKit, in memory)
 
 enum HelperError: Error, CustomStringConvertible {
-    case noPermission, noWindow, noDisplay, badImage(String)
+    case noPermission, noWindow, noDisplay, badImage(String), noImage
     var description: String {
         switch self {
         case .noPermission: return "Screen Recording permission is not granted"
         case .noWindow: return "That window is no longer on screen"
         case .noDisplay: return "No display found"
         case .badImage(let p): return "Could not read image: \(p)"
+        case .noImage: return "No image to crop"
         }
     }
 }
@@ -207,6 +212,42 @@ func recognize(_ image: CGImage, _ opts: OCROptions) async throws -> [[String: A
     return try recognizeLines(image, opts)
 }
 
+// MARK: - Cropping (math pass)
+
+/// The last image whose text was read. Kept in memory only (never on disk) so the math pass can
+/// crop the part with new math; replaced on the next read and gone when the helper exits.
+var lastImage: CGImage?
+
+/// `rect` is in fractions of the image, top-left origin (same as text block boxes).
+func jpegBase64(_ image: CGImage, rect: [String: Double]?, maxWidth: Int) throws -> [String: Any] {
+    var img = image
+    if let r = rect, let x = r["x"], let y = r["y"], let w = r["w"], let h = r["h"] {
+        let W = Double(image.width), H = Double(image.height)
+        let crop = CGRect(x: x * W, y: y * H, width: w * W, height: h * H).integral
+            .intersection(CGRect(x: 0, y: 0, width: W, height: H))
+        guard !crop.isEmpty, let c = image.cropping(to: crop) else { throw HelperError.noImage }
+        img = c
+    }
+    if img.width > maxWidth {
+        let scale = Double(maxWidth) / Double(img.width)
+        let size = (w: maxWidth, h: max(1, Int(Double(img.height) * scale)))
+        guard let ctx = CGContext(data: nil, width: size.w, height: size.h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw HelperError.noImage }
+        ctx.interpolationQuality = .high
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: size.w, height: size.h))
+        guard let scaled = ctx.makeImage() else { throw HelperError.noImage }
+        img = scaled
+    }
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
+        throw HelperError.noImage
+    }
+    CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { throw HelperError.noImage }
+    return ["jpeg": (data as Data).base64EncodedString(), "width": img.width, "height": img.height]
+}
+
 // MARK: - Commands
 
 /// Thumbnail of the last capture that was actually read. Comparing against the last
@@ -245,10 +286,11 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
             }
             let blocks = try await recognize(image, OCROptions(req))
             lastReadThumb = thumb
+            lastImage = image
             out["skipped"] = false
             out["blocks"] = blocks
             out["ms"] = Int(Date().timeIntervalSince(t0) * 1000)
-            return out   // `image` goes out of scope here; nothing was written to disk
+            return out   // nothing was written to disk; `lastImage` is replaced on the next read
 
         case "ocrFile":
             let path = req["path"] as? String ?? ""
@@ -256,8 +298,18 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
                   let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { throw HelperError.badImage(path) }
             let t0 = Date()
             let blocks = try await recognize(image, OCROptions(req))
+            lastImage = image
             return ["ok": true, "blocks": blocks, "width": image.width, "height": image.height,
                     "ms": Int(Date().timeIntervalSince(t0) * 1000)]
+
+        case "image":
+            guard let img = lastImage else { throw HelperError.noImage }
+            let out = try jpegBase64(img, rect: req["rect"] as? [String: Double], maxWidth: req["maxWidth"] as? Int ?? 1400)
+            return ["ok": true].merging(out) { a, _ in a }
+
+        case "forgetImage":
+            lastImage = nil
+            return ["ok": true]
 
         case "resetChange":
             lastReadThumb = []
