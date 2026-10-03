@@ -95,13 +95,15 @@ export default function History() {
 
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="drag h-12 shrink-0" />
-        {detail ? <SessionView s={detail} courseName={courseName(detail.courseId)} live={detail.id === liveId} /> : null}
+        {detail ? (
+          <SessionView s={detail} courseName={courseName(detail.courseId)} live={detail.id === liveId} onChanged={() => void refresh()} />
+        ) : null}
       </main>
     </div>
   );
 }
 
-function SessionView({ s, courseName, live }: { s: SessionDetail; courseName: string; live: boolean }) {
+function SessionView({ s, courseName, live, onChanged }: { s: SessionDetail; courseName: string; live: boolean; onChanged: () => void }) {
   const started = new Date(s.startedAt);
   return (
     <div className="flex-1 overflow-y-auto px-8 pb-10">
@@ -130,6 +132,19 @@ function SessionView({ s, courseName, live }: { s: SessionDetail; courseName: st
                   <span className="text-neutral-500 tabular-nums dark:text-neutral-400">
                     Quiz: {s.quizScore.correct}/{s.quizScore.total}
                   </span>
+                ) : null}
+                {s.summary ? (
+                  <button
+                    onClick={() => {
+                      if (confirm("Make a new summary and quiz for this session? The current ones and your quiz answers will be replaced.")) {
+                        void window.api.redoReview(s.id);
+                      }
+                    }}
+                    className="rounded-lg px-3 py-1 font-medium text-blue-600 hover:bg-blue-600/10 dark:text-blue-400"
+                    title="After removing passages, make the summary and quiz again"
+                  >
+                    Redo
+                  </button>
                 ) : null}
                 <button
                   onClick={() => void window.api.openReview(s.id)}
@@ -161,11 +176,25 @@ function SessionView({ s, courseName, live }: { s: SessionDetail; courseName: st
       ) : (
         <ol className="divide-y divide-black/10 dark:divide-white/10">
           {s.chunks.map((c) => (
-            <li key={c.id} className="py-4 first:pt-0">
-              <p className="mb-1 truncate text-xs text-neutral-500 dark:text-neutral-400">
-                <span className="tabular-nums">{timeFmt.format(new Date(c.capturedAt))}</span> · {c.sourceApp}
-                {c.sourceTitle ? ` — ${c.sourceTitle}` : ""}
-              </p>
+            <li key={c.id} className="group py-4 first:pt-0">
+              <div className="mb-1 flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate text-xs text-neutral-500 dark:text-neutral-400">
+                  <span className="tabular-nums">{timeFmt.format(new Date(c.capturedAt))}</span> · {c.sourceApp}
+                  {c.sourceTitle ? ` — ${c.sourceTitle}` : ""}
+                </p>
+                <button
+                  onClick={() => {
+                    if (confirm("Remove this passage? It won't be used in summaries or quizzes. This can't be undone.")) {
+                      void window.api.deletePassage(c.id).then(onChanged);
+                    }
+                  }}
+                  className="rounded px-1.5 text-neutral-400 opacity-0 group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-600 focus:opacity-100"
+                  title="Remove this passage"
+                  aria-label="Remove this passage"
+                >
+                  ✕
+                </button>
+              </div>
               <Rich text={c.text} keepLines />
             </li>
           ))}

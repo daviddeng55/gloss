@@ -156,7 +156,7 @@ export async function summarizeSession(
         role: "user",
         content: `Below are numbered passages of ${course} notes captured from the student's screen during one study session, in the order they were seen.${goal ? ` The student's goal was: "${goal}".` : ""}
 
-List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Keep math short and simple; plain notation like (x+y)/2 or sqrt(xy) is fine. Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads).
+List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Keep math short and simple; plain notation like (x+y)/2 or sqrt(xy) is fine. Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads) and any passage that isn't ${course} course material (web searches, other courses, social media, unrelated sites) — leave those out entirely.
 If the passages are too garbled or unrelated to the course to summarize honestly, set "enough" to false, explain why in "reason", and return no points. Otherwise set "enough" to true and "reason" to "".
 
 ${text}`,
@@ -284,7 +284,7 @@ Write a quiz of 8 questions (at least 3 "multiple_choice" and at least 3 "short_
 - multiple_choice: 4 "options", exactly one correct; "correct_option" is its index starting at 0; "answer" is the correct option's text. Wrong options should be plausible.
 - short_answer: a question with a short answer (a few words or one sentence); "answer" is the model answer taken from the passage.
 - Write math in LaTeX between $...$.
-- Ignore stray interface text and anything that looks garbled.
+- Ignore stray interface text, anything that looks garbled, and any passage that isn't ${course} course material (web searches, other courses, unrelated sites). Never ask about those.
 If the passages don't contain enough clear course material for good questions, set "enough" to false, explain in "reason", and return no questions. Otherwise "enough" is true and "reason" is "".
 
 ${text}`,
@@ -400,7 +400,7 @@ Question: ${q.question}
 Model answer: ${q.answer}
 Student's answer: ${studentAnswer}
 
-"correct" is true if the student's answer means the same as the model answer (wording, spelling and notation can differ; it may be less detailed but must not be wrong or missing the key idea).
+"correct" is true if the student's answer means the same as the model answer (wording, spelling and notation can differ — e.g. "sqrt(x)", "x^2", "sum" or "a/b" typed instead of symbols; it may be less detailed but must not be wrong or missing the key idea).
 "explanation": if correct, "". If not, 1–2 sentences, based on the passage, on what the right idea is and what was missing or wrong.`,
       },
     ],
@@ -416,12 +416,15 @@ const MATH_SCHEMA = {
   required: ["lines"],
 };
 
-/** Letters of a line with LaTeX commands removed, for checking a rewrite still says the same thing. */
+/**
+ * Letters and digits of a line with LaTeX commands removed, for checking a rewrite still says the same
+ * thing. Digits count too, so lines that are mostly numbers (1^2 + 2^2 + ...) match the right line.
+ */
 export function letterSkeleton(s: string): string {
   return s
     .replace(/\\[a-zA-Z]+/g, "")
     .toLowerCase()
-    .replace(/[^a-z]/g, "");
+    .replace(/[^a-z0-9]/g, "");
 }
 
 /** How much two lines' letters agree, 0–1 (longest common subsequence over the longer one). */
@@ -449,16 +452,18 @@ export function acceptRewrite(original: string, rewritten: string): boolean {
 export function alignRewrites(ocrLines: string[], transcribed: string[]): { lines: string[]; changed: number } {
   const used = new Set<number>();
   let changed = 0;
+  let expected = 0; // lines usually appear in the same order, so prefer the next one on a near-tie
   const lines = ocrLines.map((orig) => {
     let best = -1;
     let bestScore = 0;
     transcribed.forEach((t, j) => {
       if (used.has(j)) return;
-      const score = letterAgreement(orig, t);
+      const score = letterAgreement(orig, t) - 0.001 * Math.abs(j - expected);
       if (score > bestScore) [best, bestScore] = [j, score];
     });
     if (best < 0 || !acceptRewrite(orig, transcribed[best])) return orig;
     used.add(best);
+    expected = best + 1;
     const r = transcribed[best];
     if (r !== orig) changed++;
     return r;

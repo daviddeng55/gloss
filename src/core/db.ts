@@ -233,6 +233,21 @@ export class StudyDb {
       .run(r.session_id, r.session_id);
   }
 
+  /** Removes one passage (the user chose to; e.g. a page they didn't mean to study). */
+  deleteChunk(id: string) {
+    this.db.prepare("DELETE FROM chunks WHERE id = ?").run(id);
+  }
+
+  /** Clears a session's summary and quiz (including answers) so they can be made again. */
+  clearReview(sessionId: string) {
+    this.db.exec("BEGIN");
+    this.db.prepare("DELETE FROM quiz_items WHERE session_id = ?").run(sessionId);
+    this.db
+      .prepare("UPDATE sessions SET summary = NULL, quiz_note = NULL, quiz_correct = NULL, quiz_total = NULL WHERE id = ?")
+      .run(sessionId);
+    this.db.exec("COMMIT");
+  }
+
   close() {
     this.db.close();
   }

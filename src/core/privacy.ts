@@ -50,6 +50,13 @@ export function isOwnWindow(w: WindowInfo, projectName: string): boolean {
   );
 }
 
+/** Browser pages with nothing to study on them. */
+const BLANK_PAGE = /^(new tab|start page|untitled|favorites|new private tab|blank page)$/i;
+
+export function isBlankPage(w: WindowInfo): boolean {
+  return BLANK_PAGE.test(w.title.replace(/\s*[🔊🔇]\s*$/u, "").trim());
+}
+
 /** Returns why this window must not be recorded, or null if it's fine. */
 export function blockedReason(w: WindowInfo, list: NeverRecord, projectName: string): string | null {
   if (list.apps.includes(w.bundleId.toLowerCase()) || list.apps.includes(w.app.toLowerCase())) {
@@ -58,5 +65,6 @@ export function blockedReason(w: WindowInfo, list: NeverRecord, projectName: str
   const hit = list.titles.find((re) => re.test(w.title));
   if (hit) return `"${w.title}" matches never-record rule /${hit.source}/`;
   if (isOwnWindow(w, projectName)) return `${w.app} is showing this project (${projectName}), not study material`;
+  if (isBlankPage(w)) return "blank browser page";
   return null;
 }

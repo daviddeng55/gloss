@@ -11,6 +11,7 @@ const errorText = (err: unknown) =>
 
 export class ReviewService {
   private progress = new Map<string, Progress>();
+  private saving = new Map<string, Promise<void>>(); // sessions whose text is still being saved
   private queue: Promise<void> = Promise.resolve();
   private db: StudyDb;
   private courses: () => Course[];
@@ -39,8 +40,18 @@ export class ReviewService {
     this.changed(sessionId);
   }
 
-  /** Starts making whatever is missing for this session (summary, then quiz). */
-  ensure(sessionId: string) {
+  /**
+   * Starts making whatever is missing for this session (summary, then quiz). `saved`: the session is
+   * still finishing (math re-reads); wait for it before reading its text.
+   */
+  ensure(sessionId: string, saved?: Promise<void>) {
+    if (saved) {
+      this.saving.set(sessionId, saved);
+      void saved.finally(() => {
+        this.saving.delete(sessionId);
+        this.changed(sessionId);
+      });
+    }
     const p = this.status(sessionId);
     const busy = [p.summary, p.quiz].includes("working");
     const missing = p.summary === "waiting" || p.quiz === "waiting";
@@ -59,7 +70,13 @@ export class ReviewService {
     this.changed(sessionId);
   }
 
+  /** Forget progress after the summary and quiz were cleared (to make them again). */
+  forget(sessionId: string) {
+    this.progress.delete(sessionId);
+  }
+
   private async generate(sessionId: string) {
+    await this.saving.get(sessionId)?.catch(() => {});
     const session = this.db.getSession(sessionId);
     if (!session) return;
     const ai = await checkAi();
@@ -113,6 +130,7 @@ export class ReviewService {
     const p = this.status(sessionId);
     return {
       sessionId,
+      finishing: this.saving.has(sessionId),
       courseName: this.courseName(s.courseId),
       goal: s.goal,
       startedAt: s.startedAt,

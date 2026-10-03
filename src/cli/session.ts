@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { CaptureLoop, statsRows } from "../core/capture.ts";
+import { CaptureLoop, DEFAULT_SETTINGS, statsRows } from "../core/capture.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
 import { TranscriptWriter } from "../core/transcript.ts";
@@ -82,7 +82,7 @@ const loop = new CaptureLoop({
   helper,
   neverRecord: loadNeverRecord(root("never-record.json")),
   projectName: basename(root(".")),
-  settings: { intervalMs, mode, engine, languageCorrection, threshold },
+  settings: { intervalMs, mode, engine, languageCorrection, threshold, dwellMs: DEFAULT_SETTINGS.dwellMs },
   onEntry: (entry) => transcript.add(entry),
   onLog: (line) => console.log(line),
 });

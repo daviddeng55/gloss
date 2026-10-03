@@ -15,6 +15,7 @@ export type CaptureSettings = {
   engine: "document" | "lines";
   languageCorrection: boolean;
   threshold: number; // fraction of the image that must change before re-reading
+  dwellMs: number; // a window or tab is only read after it has been in front this long
 };
 
 export const DEFAULT_SETTINGS: CaptureSettings = {
@@ -23,6 +24,7 @@ export const DEFAULT_SETTINGS: CaptureSettings = {
   engine: "document",
   languageCorrection: false,
   threshold: 0.02,
+  dwellMs: 8000,
 };
 
 export type CaptureStats = {
@@ -42,7 +44,14 @@ export type CaptureStats = {
   mathPasses: number; // screenshots of new math re-read by the AI model
   mathLinesFixed: number;
   mathPassMs: number;
+  mathSkipped: number; // math captures not re-read (too far behind, or session ended long ago)
+  dwelling: number; // checks skipped because the window hadn't been in front long enough
 };
+
+/** Math re-reads waiting at most; beyond this, new math keeps Apple's reading (protects a fanless laptop). */
+const MAX_MATH_BACKLOG = 6;
+/** After a session ends, keep finishing queued math re-reads for at most this long. */
+const MATH_DRAIN_MS = 180_000;
 
 /** Re-reads lines of math from a screenshot (JPEG base64); returns the corrected lines. */
 export type MathPass = (imageBase64: string, lines: string[]) => Promise<{ lines: string[]; changed: number }>;
@@ -69,9 +78,15 @@ export class CaptureLoop {
   readonly stats: CaptureStats = {
     ticks: 0, unchanged: 0, neverRecord: 0, changedMidCapture: 0, readOk: 0, errors: 0,
     ocrMsTotal: 0, linesIn: 0, noise: 0, duplicate: 0, kept: 0, redactions: 0, mathFixes: 0,
-    mathPasses: 0, mathLinesFixed: 0, mathPassMs: 0,
+    mathPasses: 0, mathLinesFixed: 0, mathPassMs: 0, mathSkipped: 0, dwelling: 0,
   };
-  private mathReadyAt = 0; // the math pass is rationed: at most once per mathCooldownMs
+  // The window currently in front and since when (for the dwell rule).
+  private candidate = { source: "", since: 0 };
+  // Math re-reads run one at a time in the background; entries are still saved in capture order.
+  private mathChain: Promise<unknown> = Promise.resolve();
+  private outChain: Promise<void> = Promise.resolve();
+  private mathBacklog = 0;
+  private stoppedAt = 0;
   private state: "idle" | "running" | "paused" | "stopped" = "idle";
   private lastSource = "";
   private activeBefore = 0; // ms of active (unpaused) time before the current run stretch
@@ -86,7 +101,6 @@ export class CaptureLoop {
     onEntry: (entry: TranscriptEntry) => void;
     onLog?: (line: string) => void;
     mathPass?: MathPass; // only for math courses
-    mathCooldownMs?: number;
   };
 
   constructor(opts: CaptureLoop["opts"]) {
@@ -110,14 +124,16 @@ export class CaptureLoop {
     // (Reading `status` rather than `state` because pause()/stop() change it from outside this loop.)
     while (this.status !== "stopped") {
       if (this.status === "paused") {
-        await sleep(250);
+        await sleep(Math.min(250, this.opts.settings.intervalMs));
         continue;
       }
       const tickStart = Date.now();
       await this.tick();
       // Sleep in short steps so pause/stop take effect promptly.
-      while (this.status === "running" && Date.now() - tickStart < this.opts.settings.intervalMs) await sleep(250);
+      const step = Math.min(250, this.opts.settings.intervalMs);
+      while (this.status === "running" && Date.now() - tickStart < this.opts.settings.intervalMs) await sleep(step);
     }
+    await this.outChain; // save everything captured, after any queued math re-reads finish
   }
 
   pause() {
@@ -137,6 +153,7 @@ export class CaptureLoop {
     if (this.state === "stopped") return;
     this.activeBefore = this.activeMs;
     this.state = "stopped";
+    this.stoppedAt = Date.now();
   }
 
   private log(line: string) {
@@ -149,36 +166,51 @@ export class CaptureLoop {
   }
 
   /**
-   * Math courses: Apple's text recognition misreads symbols, exponents and Greek letters, so new
-   * math-looking paragraphs are cropped from the screenshot and re-read by the AI model. This takes
-   * 10–30 s on a laptop, so it runs at most once per cooldown and the rest wait for the next chance.
-   * Rewrites `paragraphs` in place.
+   * Math courses: Apple's text recognition misreads symbols, exponents and Greek letters, so the
+   * math-looking paragraphs of each capture are cropped from the screenshot and re-read by the AI
+   * model. That takes 10–30 s, so it runs in the background, one at a time; the capture's text is
+   * saved once its re-read finishes (or fails). Returns the paragraphs with corrected lines.
    */
-  private async rereadMath(paragraphs: string[], boxes: Box[]) {
-    const { mathPass, helper } = this.opts;
-    if (!mathPass || Date.now() < this.mathReadyAt) return;
-    const idx = paragraphs.map((p, i) => (looksMathy(p) ? i : -1)).filter((i) => i >= 0);
-    if (idx.length === 0) return;
+  private async rereadMath(jpeg: string, paragraphs: string[], idx: number[]): Promise<string[]> {
+    if (this.status === "stopped" && Date.now() - this.stoppedAt > MATH_DRAIN_MS) {
+      this.stats.mathSkipped++;
+      return paragraphs;
+    }
     const t0 = Date.now();
     try {
-      const { jpeg } = await helper.image(unionBox(idx.map((i) => boxes[i])));
       const lines = idx.flatMap((i) => paragraphs[i].split("\n"));
-      const out = await mathPass(jpeg, lines);
-      // Put the corrected lines back into their paragraphs.
+      const out = await this.opts.mathPass!(jpeg, lines);
+      const result = [...paragraphs];
       let k = 0;
       for (const i of idx) {
         const n = paragraphs[i].split("\n").length;
-        paragraphs[i] = out.lines.slice(k, k + n).join("\n");
+        result[i] = out.lines.slice(k, k + n).join("\n");
         k += n;
       }
       this.stats.mathPasses++;
       this.stats.mathLinesFixed += out.changed;
-      this.log(`math pass: re-read ${lines.length} lines, fixed ${out.changed} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+      this.log(`math re-read: ${lines.length} lines, fixed ${out.changed} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+      return result;
     } catch (err) {
-      this.log(`math pass skipped: ${(err as Error).message}`);
+      this.stats.mathSkipped++;
+      this.log(`math re-read failed: ${(err as Error).message}`);
+      return paragraphs;
     } finally {
       this.stats.mathPassMs += Date.now() - t0;
-      this.mathReadyAt = Date.now() + (this.opts.mathCooldownMs ?? 45_000);
+    }
+  }
+
+  /** Final clean-up and hand-off of one capture's text. */
+  private emit(meta: { capturedAt: string; app: string; title: string }, paragraphs: string[]) {
+    try {
+      const fixed = fixMath(paragraphs.join("\n\n"));
+      this.stats.mathFixes += fixed.count;
+      const red = redact(fixed.text);
+      this.stats.redactions += red.count;
+      this.opts.onEntry({ ...meta, text: red.text });
+    } catch (err) {
+      this.stats.errors++;
+      this.log(`error saving text: ${(err as Error).message}`);
     }
   }
 
@@ -198,6 +230,16 @@ export class CaptureLoop {
       }
       // Force a fresh read whenever the app or window changes.
       const source = `${front.bundleId}|${front.title}`;
+      // Dwell rule: only read a window or tab that has stayed in front for a while, so a quick
+      // or accidental switch to another page is never recorded.
+      if (source !== this.candidate.source) this.candidate = { source, since: Date.now() };
+      const inFront = Date.now() - this.candidate.since;
+      if (inFront < settings.dwellMs) {
+        stats.dwelling++;
+        this.lastSource = "";
+        this.log(`waiting: ${front.app} — ${front.title || "(untitled)"} (in front ${Math.round(inFront / 1000)} s)`);
+        return;
+      }
       // Whole-display mode also hides any other window that must not be recorded.
       const excludeWindowIds =
         settings.mode === "display" ? windows.filter((w) => this.reasonToSkip(w)).map((w) => w.windowId) : [];
@@ -234,13 +276,22 @@ export class CaptureLoop {
       stats.noise += c.noise;
       stats.duplicate += c.duplicate;
       stats.kept += c.kept;
-      if (paragraphs.length) await this.rereadMath(paragraphs, boxes);
       if (paragraphs.length) {
-        const fixed = fixMath(paragraphs.join("\n\n"));
-        stats.mathFixes += fixed.count;
-        const red = redact(fixed.text);
-        stats.redactions += red.count;
-        this.opts.onEntry({ capturedAt: new Date().toISOString(), app: front.app, title: front.title, text: red.text });
+        const meta = { capturedAt: new Date().toISOString(), app: front.app, title: front.title };
+        let ready: Promise<string[]> = Promise.resolve(paragraphs);
+        const idx = this.opts.mathPass ? paragraphs.map((p, i) => (looksMathy(p) ? i : -1)).filter((i) => i >= 0) : [];
+        if (idx.length && this.mathBacklog >= MAX_MATH_BACKLOG) {
+          stats.mathSkipped++;
+          this.log("math re-read skipped: too many waiting");
+        } else if (idx.length) {
+          // Crop now (the screenshot is replaced on the next read); re-read later, in order.
+          const { jpeg } = await helper.image(unionBox(idx.map((i) => boxes[i])));
+          this.mathBacklog++;
+          const job = this.mathChain.then(() => this.rereadMath(jpeg, paragraphs, idx));
+          this.mathChain = job.catch(() => {});
+          ready = job.finally(() => this.mathBacklog--);
+        }
+        this.outChain = this.outChain.then(async () => this.emit(meta, await ready.catch(() => paragraphs)));
       }
       this.log(`read ${label}: ${c.linesIn} lines → kept ${c.kept} new, ${c.duplicate} repeated, ${c.noise} noise  (${res.ms} ms)`);
     } catch (err) {
@@ -267,6 +318,8 @@ export function statsRows(s: CaptureStats, activeMs: number): Record<string, str
     "Lines dropped as noise": s.noise,
     "Math symbols fixed (∈ ℕ ∀ …)": s.mathFixes,
     "Math re-read by AI": s.mathPasses ? `${s.mathPasses} times, ${s.mathLinesFixed} lines fixed` : "—",
+    "Math not re-read": s.mathSkipped,
+    "Skipped — not in front long enough": s.dwelling,
     Redactions: s.redactions,
   };
 }

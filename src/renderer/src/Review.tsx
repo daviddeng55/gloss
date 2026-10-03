@@ -1,5 +1,5 @@
 // End-of-session review: what you covered, then a short quiz on it.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AnswerResult, QuizItemView, ReviewData } from "../../shared/types.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
 import Rich from "./Rich.tsx";
@@ -85,6 +85,7 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
   const [open, setOpen] = useState<string | null>(null); // "point:chunk" whose source is showing
   const { status, data: summary, error } = data.summary;
   if (status === "error") return <Problem message={error ?? "Couldn't make a summary."} onRetry={onRetry} />;
+  if (data.finishing) return <Working>Finishing reading your notes (re-reading the math)… this can take a couple of minutes.</Working>;
   if (status !== "done" || !summary) return <Working>Summarizing your session… this takes about a minute.</Working>;
   if (!summary.ok) return <Problem message={summary.reason} />;
   return (
@@ -162,6 +163,7 @@ function Question(props: {
   const [checking, setChecking] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const answerRef = useRef<HTMLTextAreaElement>(null);
 
   async function submit(answer: string) {
     if (checking || result || !answer.trim()) return;
@@ -211,13 +213,27 @@ function Question(props: {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
+          <SymbolBar
+            disabled={!!result || checking}
+            onInsert={(sym) => {
+              const el = answerRef.current;
+              const start = el?.selectionStart ?? response.length;
+              const end = el?.selectionEnd ?? response.length;
+              setResponse(response.slice(0, start) + sym + response.slice(end));
+              requestAnimationFrame(() => {
+                el?.focus();
+                el?.setSelectionRange(start + sym.length, start + sym.length);
+              });
+            }}
+          />
           <textarea
+            ref={answerRef}
             value={response}
             disabled={!!result || checking}
             onChange={(e) => setResponse(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && void submit(response)}
             rows={3}
-            placeholder="Your answer"
+            placeholder="Your answer (typing sqrt(x), x^2 or sum works too)"
             autoFocus
             className="selectable rounded-lg border border-black/10 bg-transparent px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 disabled:opacity-70 dark:border-white/15"
           />
@@ -261,6 +277,29 @@ function Question(props: {
         ) : null}
       </div>
       {showSource && item.chunkId ? <Source data={data} chunkId={item.chunkId} /> : null}
+    </div>
+  );
+}
+
+// Symbols you can't type on a keyboard, for short answers.
+const SYMBOLS = ["∑", "∏", "√", "²", "³", "ⁿ", "≤", "≥", "≠", "≡", "∈", "∉", "ℕ", "ℤ", "ℚ", "ℝ", "∀", "∃", "⇒", "⇔", "¬", "∧", "∨", "π", "θ", "α", "β", "λ", "∞", "·", "÷", "±", "|"];
+
+function SymbolBar({ onInsert, disabled }: { onInsert: (s: string) => void; disabled: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-1" aria-label="Insert a symbol">
+      {SYMBOLS.map((sym) => (
+        <button
+          key={sym}
+          type="button"
+          disabled={disabled}
+          onMouseDown={(e) => e.preventDefault()} // keep the cursor in the answer box
+          onClick={() => onInsert(sym)}
+          className="min-w-7 rounded-md bg-black/5 px-1.5 py-0.5 text-[14px] hover:bg-black/10 disabled:opacity-40 dark:bg-white/10 dark:hover:bg-white/20"
+          title={`Insert ${sym}`}
+        >
+          {sym}
+        </button>
+      ))}
     </div>
   );
 }

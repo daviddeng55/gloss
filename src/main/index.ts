@@ -1,6 +1,6 @@
 // Main process: the menu bar icon, the capture session, the database, and the windows.
 // (Electron's "main process" is the hidden Node program; windows are separate "renderer" processes.)
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, screen, shell, Tray } from "electron";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { checkAi, transcribeMath } from "../core/ai.ts";
@@ -177,25 +177,32 @@ function resumeSession() {
   broadcast();
 }
 
-async function endSession() {
-  if (!current) return;
+/** Sessions that have ended but are still saving (finishing math re-reads). Quit waits for these. */
+const finishing = new Set<Promise<void>>();
+
+/**
+ * Ends the session right away (the menu bar goes back to idle), then finishes in the background:
+ * queued math re-reads complete (up to a few minutes), the text is saved, and the summary and quiz follow.
+ */
+function endSession(): Promise<void> {
+  if (!current) return Promise.resolve();
   const c = current;
+  const endedAt = new Date().toISOString();
   c.loop.stop();
-  await c.done; // let the capture in progress finish
-  c.chunker.flush();
-  c.helper.close();
-  db.endSession(c.sessionId, { endedAt: new Date().toISOString(), activeMs: c.loop.activeMs, stats: c.loop.stats });
   current = null;
   broadcast();
-  if (c.chunks > 0 && !quitting) {
-    reviews.ensure(c.sessionId); // summary, then quiz
+  const saved = c.done.then(() => {
+    c.chunker.flush();
+    c.helper.close();
+    db.endSession(c.sessionId, { endedAt, activeMs: c.loop.activeMs, stats: c.loop.stats });
+  });
+  finishing.add(saved);
+  void saved.finally(() => finishing.delete(saved));
+  if (!quitting) {
+    reviews.ensure(c.sessionId, saved); // summary, then quiz, once the text is saved
     openReview(c.sessionId);
-  } else {
-    new Notification({
-      title: `${c.course.name} session saved`,
-      body: `${clock(c.loop.activeMs)} studied · ${c.chunks === 0 ? "no notes were captured" : `${c.chunks} passages saved`}`,
-    }).show();
   }
+  return saved;
 }
 
 // ---------- windows ----------
@@ -307,6 +314,13 @@ function registerIpc() {
     reviews.ensure(String(id));
     openReview(String(id));
   });
+  ipcMain.handle("chunks:delete", (_e, id: unknown) => db.deleteChunk(String(id)));
+  ipcMain.handle("review:redo", (_e, id: unknown) => {
+    db.clearReview(String(id));
+    reviews.forget(String(id));
+    reviews.ensure(String(id));
+    openReview(String(id));
+  });
   ipcMain.handle("quiz:answer", (_e, itemId: unknown, response: unknown) =>
     reviews.answer(String(itemId), typeof response === "string" ? response.slice(0, 2000) : ""),
   );
@@ -371,10 +385,13 @@ app.on("window-all-closed", () => {
 
 let quitting = false;
 app.on("before-quit", (e) => {
-  if (current && !quitting) {
+  if ((current || finishing.size) && !quitting) {
     e.preventDefault();
     quitting = true;
-    void endSession().then(() => app.quit()); // save the session before quitting
+    // Save the session (and any still finishing) before quitting.
+    void endSession()
+      .then(() => Promise.all([...finishing]))
+      .then(() => app.quit());
   }
 });
 
@@ -445,6 +462,8 @@ async function smokeReview(dir: string) {
   }
   if (!reviewWin) openReview(id); // in case the window was closed meanwhile
   await wait(3000);
+  await reviewWin!.webContents.executeJavaScript("document.querySelector('.overflow-y-auto').scrollTop = 1e6");
+  await wait(500);
   const { writeFileSync } = await import("node:fs");
   writeFileSync(join(dir, "review.png"), (await reviewWin!.webContents.capturePage()).toPNG());
   console.log("SMOKE score", JSON.stringify(db.getSession(id)!.quizScore));

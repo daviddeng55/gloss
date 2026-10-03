@@ -46,6 +46,7 @@ export type TaskStatus = "waiting" | "working" | "done" | "error";
 /** Everything the review window shows for one session. */
 export type ReviewData = {
   sessionId: string;
+  finishing: boolean; // the session's text is still being saved (math re-reads finishing)
   courseName: string;
   goal?: string;
   startedAt: string;
@@ -85,6 +86,8 @@ export interface StudyApi {
   retryReview(sessionId: string): Promise<void>;
   answerQuestion(itemId: string, response: string): Promise<AnswerResult>;
   openReview(sessionId: string): Promise<void>;
+  redoReview(sessionId: string): Promise<void>;
+  deletePassage(chunkId: string): Promise<void>;
   onReview(callback: (sessionId: string) => void): () => void;
   closeWindow(): Promise<void>;
   onState(callback: (state: AppState) => void): () => void;

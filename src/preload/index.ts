@@ -15,6 +15,8 @@ const api: StudyApi = {
   retryReview: (sessionId) => ipcRenderer.invoke("review:retry", sessionId),
   answerQuestion: (itemId, response) => ipcRenderer.invoke("quiz:answer", itemId, response),
   openReview: (sessionId) => ipcRenderer.invoke("review:open", sessionId),
+  redoReview: (sessionId) => ipcRenderer.invoke("review:redo", sessionId),
+  deletePassage: (chunkId) => ipcRenderer.invoke("chunks:delete", chunkId),
   onReview: (callback) => {
     const listener = (_e: unknown, sessionId: string) => callback(sessionId);
     ipcRenderer.on("review", listener);
