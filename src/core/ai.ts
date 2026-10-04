@@ -28,8 +28,54 @@ export class AiError extends Error {
 
 type Message = { role: "system" | "user" | "assistant"; content: string; images?: string[] };
 
+// ---------- one model at a time ----------
+
+/** How long Ollama keeps a model in memory after its last use. */
+export const KEEP_ALIVE = "3m";
+
+let aiQueue: Promise<unknown> = Promise.resolve();
+let currentModel: string | null = null;
+
+/** Unloads every loaded model except `keep` (Ollama frees a model when asked with keep_alive 0). */
+async function unloadOthers(baseUrl: string, keep: string) {
+  const ps = (await (await fetch(`${baseUrl}/api/ps`, { signal: AbortSignal.timeout(3000) })).json()) as {
+    models?: { name: string }[];
+  };
+  for (const m of ps.models ?? []) {
+    if (m.name === keep) continue;
+    await fetch(`${baseUrl}/api/generate`, {
+      method: "POST",
+      body: JSON.stringify({ model: m.name, keep_alive: 0 }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  }
+}
+
+/**
+ * Runs AI work one request at a time, and never with two models in memory: switching to another
+ * model first unloads the previous one. (A 16 GB fanless laptop can't comfortably hold both.)
+ */
+export function withModel<T>(cfg: AiConfig, work: () => Promise<T>): Promise<T> {
+  const run = aiQueue.then(async () => {
+    if (currentModel !== cfg.model) {
+      await unloadOthers(cfg.baseUrl, cfg.model).catch(() => {});
+      currentModel = cfg.model;
+    }
+    return work();
+  });
+  aiQueue = run.catch(() => {});
+  return run;
+}
+
 /** One chat call. With `schema`, the model must reply with JSON matching it, which we parse. */
-async function chat<T = string>(
+function chat<T = string>(
+  cfg: AiConfig,
+  req: { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number },
+): Promise<T> {
+  return withModel(cfg, () => chatNow<T>(cfg, req));
+}
+
+async function chatNow<T>(
   cfg: AiConfig,
   req: { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number },
 ): Promise<T> {
@@ -44,6 +90,7 @@ async function chat<T = string>(
         messages: req.messages,
         stream: false,
         think: req.think ?? false,
+        keep_alive: KEEP_ALIVE,
         format: req.schema,
         options: { temperature: req.temperature ?? 0.2, num_ctx: req.numCtx ?? 8192 },
       }),
@@ -261,7 +308,7 @@ export async function makeQuiz(
   passages: Passage[],
   course: string,
   cfg: AiConfig = DEFAULT_AI,
-  opts: { think?: boolean } = {},
+  opts: { think?: boolean; askedQuestions?: string[] } = {},
 ): Promise<Quiz> {
   const thin = tooThin(passages);
   if (thin) return { ok: false, reason: thin };
@@ -284,7 +331,7 @@ Write a quiz of 8 questions (at least 3 "multiple_choice" and at least 3 "short_
 - multiple_choice: 4 "options", exactly one correct; "correct_option" is its index starting at 0; "answer" is the correct option's text. Wrong options should be plausible.
 - short_answer: a question with a short answer (a few words or one sentence); "answer" is the model answer taken from the passage.
 - Write math in LaTeX between $...$.
-- Ignore stray interface text, anything that looks garbled, and any passage that isn't ${course} course material (web searches, other courses, unrelated sites). Never ask about those.
+${opts.askedQuestions?.length ? `- During the session the student asked about: ${opts.askedQuestions.map((q) => `"${q.slice(0, 200)}"`).join("; ")}. Include at least 2 questions on those topics if the passages cover them.\n` : ""}- Ignore stray interface text, anything that looks garbled, and any passage that isn't ${course} course material (web searches, other courses, unrelated sites). Never ask about those.
 If the passages don't contain enough clear course material for good questions, set "enough" to false, explain in "reason", and return no questions. Otherwise "enough" is true and "reason" is "".
 
 ${text}`,
@@ -420,7 +467,11 @@ export const MATH_READER: AiConfig = { baseUrl: DEFAULT_AI.baseUrl, model: "glm-
  * Reads an image (JPEG/PNG, base64) into lines of Markdown + LaTeX. The reply is streamed so we can stop
  * as soon as the model starts repeating itself (small OCR models sometimes loop).
  */
-export async function readMathImage(imageBase64: string, expectedChars: number, cfg: AiConfig = MATH_READER): Promise<string[]> {
+export function readMathImage(imageBase64: string, expectedChars: number, cfg: AiConfig = MATH_READER): Promise<string[]> {
+  return withModel(cfg, () => readMathImageNow(imageBase64, expectedChars, cfg));
+}
+
+async function readMathImageNow(imageBase64: string, expectedChars: number, cfg: AiConfig): Promise<string[]> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 60_000);
   let res: Response;
@@ -432,6 +483,7 @@ export async function readMathImage(imageBase64: string, expectedChars: number, 
       body: JSON.stringify({
         model: cfg.model,
         stream: true,
+        keep_alive: KEEP_ALIVE,
         messages: [{ role: "user", content: "Text Recognition:", images: [imageBase64] }],
         // LaTeX takes ~3 tokens per character of Apple's reading; the stream check below stops loops early.
         options: { temperature: 0, num_ctx: 8192, num_predict: Math.min(3000, 200 + 3 * expectedChars), stop: ["```"] },
@@ -589,8 +641,128 @@ export async function readMathParagraphs(
 
 // ---------- later stages ----------
 
-export async function askAboutImage(): Promise<never> {
-  throw new AiError("failed", "Hover-and-ask arrives in Stage 4.");
+// ---------- asking about what's on screen (Stage 4) ----------
+
+export type HintLevel = "nudge" | "explain" | "example";
+
+export const HINT_LEVELS: Record<HintLevel, { label: string; instruction: string }> = {
+  nudge: {
+    label: "Nudge",
+    instruction:
+      "Give the smallest helpful hint (1–3 sentences) that gets the student unstuck: point at what to look at or which idea applies. Don't solve it.",
+  },
+  explain: {
+    label: "Explain the concept",
+    instruction:
+      "Explain the concept behind the question clearly and briefly, using the course material. Don't solve the student's specific problem.",
+  },
+  example: {
+    label: "Worked example of a similar problem",
+    instruction:
+      "Work through a DIFFERENT but similar example, step by step (algebra one step per line). Do not solve the student's exact problem.",
+  },
+};
+
+const STOP = new Set("the and for that this with what does from have how why can are was were when which into about there their then than your you this these those will would should could them they".split(" "));
+
+/** The session passages that share the most words with the question (no embeddings until Stage 5). */
+export function relevantPassages(question: string, passages: Passage[], max = 3, maxChars = 3000): Passage[] {
+  const words = new Set(question.toLowerCase().match(/[a-z]{4,}/g)?.filter((w) => !STOP.has(w)) ?? []);
+  if (words.size === 0) return passages.slice(-max);
+  const scored = passages
+    .map((p, i) => {
+      const text = p.text.toLowerCase();
+      let score = 0;
+      for (const w of words) if (text.includes(w)) score++;
+      return { p, score, i };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || b.i - a.i);
+  const out: Passage[] = [];
+  let chars = 0;
+  for (const { p } of scored) {
+    if (out.length >= max || chars + p.text.length > maxChars) break;
+    out.push(p);
+    chars += p.text.length;
+  }
+  return out;
+}
+
+/**
+ * Answers a question about a cropped screenshot, at one hint level, streaming the answer through
+ * `onText`. `earlier` holds previous turns about the same picture (for the hint ladder).
+ */
+export function askAboutImage(
+  req: {
+    imageBase64: string;
+    question: string;
+    course: string;
+    level: HintLevel;
+    passages: Passage[];
+    earlier: { question: string; level: HintLevel; answer: string }[];
+  },
+  onText: (text: string) => void,
+  cfg: AiConfig = DEFAULT_AI,
+): Promise<string> {
+  return withModel(cfg, async () => {
+    const material = req.passages.length
+      ? req.passages.map((p, i) => `[${i + 1}] (from: ${p.sourceTitle || "unknown window"})\n${p.text}`).join("\n\n")
+      : "(Nothing from this session's notes matches this question.)";
+    const messages: Message[] = [
+      { role: "system", content: TUTOR_RULES },
+      {
+        role: "user",
+        images: [req.imageBase64],
+        content: `Course: ${req.course}. The image shows the part of the screen the student circled.
+
+Course material from this study session:
+${material}
+
+${req.earlier.length ? `Earlier in this conversation:\n${req.earlier.map((e) => `Q: ${e.question}\nYou (${HINT_LEVELS[e.level].label}): ${e.answer}`).join("\n\n")}\n\n` : ""}Student's question: ${req.question}
+
+${HINT_LEVELS[req.level].instruction}
+If the image looks like a graded assignment or quiz question, never give its final answer. If the course material doesn't cover what's needed, say "This may not have been covered in your course yet." If the image is unclear, say so. Use Markdown; write math in LaTeX between $...$.`,
+      },
+    ];
+    const res = await fetch(`${cfg.baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(180_000),
+      body: JSON.stringify({
+        model: cfg.model,
+        messages,
+        stream: true,
+        think: false,
+        keep_alive: KEEP_ALIVE,
+        options: { temperature: 0.3, num_ctx: 8192 },
+      }),
+    }).catch(() => {
+      throw new AiError("not-running", "Ollama isn't running. Open the Ollama app, then try again.");
+    });
+    if (!res.ok || !res.body) {
+      throw new AiError(res.status === 404 ? "model-missing" : "failed", `The AI model couldn't answer (error ${res.status}).`);
+    }
+    let answer = "";
+    let buffer = "";
+    const decoder = new TextDecoder();
+    for await (const chunk of res.body) {
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        const part = JSON.parse(line) as { message?: { content?: string }; error?: string };
+        if (part.error) throw new AiError("failed", part.error);
+        const t = part.message?.content ?? "";
+        if (t) {
+          answer += t;
+          onText(t);
+        }
+      }
+    }
+    return answer;
+  });
 }
 
 export async function embed(): Promise<never> {

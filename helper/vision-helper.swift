@@ -10,6 +10,7 @@
 //   {"id":5,"cmd":"ocrFile","path":"...", ...}   -> read text from an image file (for testing)
 //   {"id":6,"cmd":"image","rect":{x,y,w,h}}      -> JPEG (base64) of part of the last image read, for the math pass
 //   {"id":7,"cmd":"forgetImage"}                 -> drop the last image from memory
+//   {"id":8,"cmd":"snap","x":..,"y":..,"rect":{x,y,w,h},...}  -> JPEG of a screen region (global points)
 //
 // Build: npm run build:helper
 
@@ -23,11 +24,17 @@ import Vision
 
 // MARK: - JSON in/out
 
+let outputLock = NSLock()
+
+/// Writes one JSON line. Replies can come from different threads, so writes are locked.
 func send(_ obj: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: obj, options: []),
           let line = String(data: data, encoding: .utf8) else { return }
+    outputLock.lock()
     FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
+    outputLock.unlock()
 }
+
 
 // MARK: - Windows
 
@@ -305,6 +312,37 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
         case "image":
             guard let img = lastImage else { throw HelperError.noImage }
             let out = try jpegBase64(img, rect: req["rect"] as? [String: Double], maxWidth: req["maxWidth"] as? Int ?? 1400)
+            return ["ok": true].merging(out) { a, _ in a }
+
+        case "snap":
+            // Capture the display under (x, y) — global points, top-left origin — leaving out windows of
+            // `excludePids` (Study Buddy's own overlay and popups) and `excludeWindowIds` (never-record
+            // windows), then crop to `rect` (global points). Memory only, like every capture.
+            guard CGPreflightScreenCaptureAccess() else { throw HelperError.noPermission }
+            let point = CGPoint(x: req["x"] as? Double ?? 0, y: req["y"] as? Double ?? 0)
+            let r = req["rect"] as? [String: Double] ?? [:]
+            let excludeIds = Set((req["excludeWindowIds"] as? [Int] ?? []).map { CGWindowID($0) })
+            let excludePids = Set((req["excludePids"] as? [Int] ?? []).map { pid_t($0) })
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let display = content.displays.first(where: { $0.frame.contains(point) }) ?? content.displays.first
+            else { throw HelperError.noDisplay }
+            let hidden = content.windows.filter {
+                excludeIds.contains($0.windowID) || excludePids.contains($0.owningApplication?.processID ?? -1)
+            }
+            let filter = SCContentFilter(display: display, excludingWindows: hidden)
+            let config = SCStreamConfiguration()
+            config.showsCursor = false
+            config.captureResolution = .best
+            let scale = CGFloat(filter.pointPixelScale)
+            config.width = Int(CGFloat(display.width) * scale)
+            config.height = Int(CGFloat(display.height) * scale)
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            let f = display.frame
+            let frac: [String: Double] = [
+                "x": ((r["x"] ?? f.minX) - f.minX) / f.width, "y": ((r["y"] ?? f.minY) - f.minY) / f.height,
+                "w": (r["w"] ?? f.width) / f.width, "h": (r["h"] ?? f.height) / f.height,
+            ]
+            let out = try jpegBase64(image, rect: frac, maxWidth: req["maxWidth"] as? Int ?? 1600)
             return ["ok": true].merging(out) { a, _ in a }
 
         case "forgetImage":

@@ -33,7 +33,7 @@ Study Buddy is a small Mac menu bar app, **for my own personal use**.
 - **Session memory:** the text is cleaned, split into chunks, and saved in a local SQLite database, tagged with the course, the session and the time.
 - **Course memory:** all sessions for a course add up over time, so the app knows what I've covered so far.
 - **AI:** local models through **Ollama** (`http://localhost:11434`) by default. A cloud provider is an optional setting.
-- **App:** Electron menu bar app with a hold-to-ask key, an overlay and a popup.
+- **App:** Electron menu bar app with an ask shortcut, an overlay and a popup.
 
 ---
 
@@ -99,19 +99,14 @@ When I end a session:
 
 **Done when:** after a real 30-minute session, the summary matches what I studied and the quiz questions are answerable from that material.
 
-## 7. Stage 4 — Hover and ask (circle and ask)
-**Trigger.** During a session I **hold the right Cmd key**. While it's held:
-- a transparent overlay appears and draws the path my cursor makes, so I can circle what I'm asking about;
-- the microphone listens (step 2), with a clear "listening" indicator.
-
-Releasing the key finishes and sends.
-- If I press any other key during the hold, ignore it (normal Cmd shortcuts keep working). Ignore holds shorter than about 0.3 s. **Esc** cancels.
+## 7. Stage 4 — Circle and ask
+**Trigger.** During a session I press **Option+A** to start. A transparent overlay appears and draws the path my cursor makes, so I can circle what I'm asking about; the microphone listens (step 2), with a clear "listening" indicator. Pressing **Option+A again, or clicking**, finishes and sends. **Esc** cancels.
 - Only works while a session is running, and respects the never-record list.
-- The trigger is configurable; a regular two-key shortcut (default `Cmd+Shift+A`) is the fallback.
+- The shortcut is configurable (`settings.json`). No keyboard monitoring: the app never needs Input Monitoring permission.
 
 **What's sent.** Crop the screenshot to the bounding box of the path I circled, with a little padding. If I didn't circle anything, crop about 900×700 points around the cursor (configurable).
 
-**Voice.** My speech becomes text with macOS's built-in **on-device** speech recognition, through the existing Swift helper. No new model downloads. The microphone is on only while the key is held.
+**Voice.** My speech becomes text with macOS's built-in **on-device** speech recognition, through the existing Swift helper. No new model downloads. The microphone is on only between the two presses.
 
 **Popup** near the cursor with:
 - the recognised question — editable, and I can type instead of speaking;
@@ -124,10 +119,10 @@ Send the cropped image, the question, the course and the most relevant text from
 
 **Performance.** Load the model only when I ask something and unload it after a few minutes idle. Never have two models loaded at once.
 
-**Permissions** (walk me through each when first needed): Input Monitoring (the right-Cmd hold), Microphone and Speech Recognition (voice).
+**Permissions** (walk me through each when first needed): Microphone and Speech Recognition (voice).
 
 **Build in two steps, and stop after each for testing:**
-1. Hold right Cmd, circle, typed question, answer.
+1. Option+A, circle, typed question, answer.
 2. Add voice.
 
 ## 8. Stage 5 — Memory across sessions

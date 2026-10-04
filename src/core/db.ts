@@ -2,7 +2,7 @@
 // Lives in the app's data folder: ~/Library/Application Support/Study Buddy/study-buddy.db
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { ChunkRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
+import type { ChunkRow, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
 import type { Passage, QuizDraft } from "./ai.ts";
 import type { NewChunk } from "./chunker.ts";
 
@@ -53,6 +53,17 @@ const MIGRATIONS = [
    CREATE INDEX quiz_session ON quiz_items(session_id, position);
    CREATE INDEX quiz_due ON quiz_items(course_id, next_due_at);
    ALTER TABLE sessions ADD COLUMN quiz_note TEXT; -- why no quiz could be made`,
+  // 3: Stage 4 — questions asked about the screen (the screenshot itself is never stored).
+  `CREATE TABLE questions (
+     id           TEXT PRIMARY KEY,
+     session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     course_id    TEXT NOT NULL,
+     asked_at     TEXT NOT NULL,
+     question     TEXT NOT NULL,
+     source_title TEXT,
+     answers      TEXT NOT NULL DEFAULT '[]'  -- JSON [{level, text, at}]
+   );
+   CREATE INDEX questions_session ON questions(session_id, asked_at);`,
 ];
 
 type Row = Record<string, any>;
@@ -137,7 +148,7 @@ export class StudyDb {
     const chunks = this.db
       .prepare("SELECT * FROM chunks WHERE session_id = ? ORDER BY captured_at, rowid")
       .all(id) as Row[];
-    return { ...toSession(s), chunks: chunks.map(toChunk) };
+    return { ...toSession(s), chunks: chunks.map(toChunk), questions: this.getQuestions(id) };
   }
 
   // ---------- Stage 3: summary and quiz ----------
@@ -231,6 +242,33 @@ export class StudyDb {
            WHERE session_id = ? AND json_extract(history, '$[0].correct') = 1) WHERE id = ?`,
       )
       .run(r.session_id, r.session_id);
+  }
+
+  // ---------- Stage 4: questions ----------
+
+  addQuestion(sessionId: string, courseId: string, question: string, sourceTitle: string): string {
+    const id = randomUUID();
+    this.db
+      .prepare("INSERT INTO questions (id, session_id, course_id, asked_at, question, source_title) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(id, sessionId, courseId, new Date().toISOString(), question, sourceTitle);
+    return id;
+  }
+
+  addAnswer(questionId: string, level: string, text: string) {
+    const r = this.db.prepare("SELECT answers FROM questions WHERE id = ?").get(questionId) as Row | undefined;
+    if (!r) return;
+    const answers = [...JSON.parse(r.answers), { level, text, at: new Date().toISOString() }];
+    this.db.prepare("UPDATE questions SET answers = ? WHERE id = ?").run(JSON.stringify(answers), questionId);
+  }
+
+  getQuestions(sessionId: string): QuestionRow[] {
+    return (this.db.prepare("SELECT * FROM questions WHERE session_id = ? ORDER BY asked_at").all(sessionId) as Row[]).map((r) => ({
+      id: r.id,
+      askedAt: r.asked_at,
+      question: r.question,
+      sourceTitle: r.source_title ?? "",
+      answers: JSON.parse(r.answers),
+    }));
   }
 
   /** Removes one passage (the user chose to; e.g. a page they didn't mean to study). */

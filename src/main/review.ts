@@ -104,7 +104,9 @@ export class ReviewService {
     if (this.status(sessionId).quiz === "waiting") {
       this.set(sessionId, { quiz: "working" });
       try {
-        const quiz = await makeQuiz(passages, course);
+        // Topics the student asked about are more likely to be quizzed.
+        const askedQuestions = this.db.getQuestions(sessionId).map((q) => q.question);
+        const quiz = await makeQuiz(passages, course, undefined, { askedQuestions });
         if (!quiz.ok) {
           this.db.saveQuizNote(sessionId, quiz.reason);
         } else {

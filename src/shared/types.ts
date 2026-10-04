@@ -25,7 +25,16 @@ export type ChunkRow = {
   capturedAt: string;
 };
 
-export type SessionDetail = SessionRow & { chunks: ChunkRow[] };
+/** A question asked about the screen during a session, with its answers (one per hint level asked). */
+export type QuestionRow = {
+  id: string;
+  askedAt: string;
+  question: string;
+  sourceTitle: string;
+  answers: { level: string; text: string; at: string }[];
+};
+
+export type SessionDetail = SessionRow & { chunks: ChunkRow[]; questions: QuestionRow[] };
 
 /** What a session covered (or why it couldn't be summarized). */
 export type SummaryData =
