@@ -3,7 +3,7 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, screen, shell, Tray } from "electron";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { checkAi, transcribeMath } from "../core/ai.ts";
+import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
 import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
@@ -143,11 +143,11 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     session.chunks!++;
   });
   // Math courses: re-read new math with the AI model (only if Ollama is ready; otherwise skip quietly).
-  const mathPass = course.math && (await checkAi()).ok ? transcribeMath : undefined;
-  if (course.math && !mathPass) console.log("[capture] math pass off: Ollama isn't ready");
+  const mathReady = course.math ? await checkAi(MATH_READER) : null;
+  if (mathReady && !mathReady.ok) console.log(`[capture] math reading off: ${mathReady.error.message}`);
   session.loop = new CaptureLoop({
     helper,
-    mathPass: mathPass && ((img, lines) => mathPass(img, lines)),
+    mathPass: mathReady?.ok ? (img, paragraphs, which) => readMathParagraphs(img, paragraphs, which) : undefined,
     neverRecord: loadNeverRecord(fromRoot("never-record.json")),
     projectName: basename(ROOT),
     ownPids: [process.pid], // never capture Study Buddy's own windows

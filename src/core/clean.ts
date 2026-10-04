@@ -32,8 +32,9 @@ export function isNoiseLine(line: string): boolean {
   const alnum = (t.match(/[\p{L}\p{N}]/gu) ?? []).length;
   // Fragments like "inG", "D2L", "10 c*", "PM": too short to mean anything, unless it's math like "x = 1".
   if (alnum < 4 && !MATH_SIGN.test(t)) return true;
-  // Garbled recognition, e.g. "22[ +1 = 2[2[[[3]" = 10 •51 [ =]": lots of stray brackets or #.
-  if ((t.match(/[[\]{}#]/g) ?? []).length >= 4) return true;
+  // Garbled recognition, e.g. "22[ +1 = 2[2[[[3]" = 10 •51 [ =]": lots of stray square brackets or #.
+  // (Not curly braces: set notation like {n ∈ ℤ : 10 | n} is full of them.)
+  if ((t.match(/[[\]#]/g) ?? []).length >= 4) return true;
   // Ignore leading bullets/dashes and trailing dropdown arrows ("- Automatic Zoom v").
   const lower = t
     .toLowerCase()

@@ -26,10 +26,10 @@ function fakeHelper(script: (t: number) => { w: WindowInfo; blocks: TextBlock[] 
     image: async () => ({ jpeg: "IMG", width: 10, height: 10 }),
   };
   const mathCalls: string[][] = [];
-  const mathPass = async (_img: string, lines: string[]) => {
-    mathCalls.push(lines);
+  const mathPass = async (_img: string, paragraphs: string[], which: number[]) => {
+    mathCalls.push(which.map((i) => paragraphs[i]));
     await sleep(mathDelayMs);
-    return { lines: lines.map((l) => l.replace("e N", "∈ ℕ")), changed: 1 };
+    return { paragraphs: paragraphs.map((p, i) => (which.includes(i) ? p.replace("e N", "∈ ℕ") : p)), changed: 1 };
   };
   return { helper: helper as unknown as VisionHelper, mathCalls, mathPass };
 }

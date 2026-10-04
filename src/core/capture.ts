@@ -42,7 +42,7 @@ export type CaptureStats = {
   redactions: number;
   mathFixes: number;
   mathPasses: number; // screenshots of new math re-read by the AI model
-  mathLinesFixed: number;
+  mathLinesFixed: number; // paragraphs replaced by the math reader's version
   mathPassMs: number;
   mathSkipped: number; // math captures not re-read (too far behind, or session ended long ago)
   dwelling: number; // checks skipped because the window hadn't been in front long enough
@@ -53,8 +53,12 @@ const MAX_MATH_BACKLOG = 6;
 /** After a session ends, keep finishing queued math re-reads for at most this long. */
 const MATH_DRAIN_MS = 180_000;
 
-/** Re-reads lines of math from a screenshot (JPEG base64); returns the corrected lines. */
-export type MathPass = (imageBase64: string, lines: string[]) => Promise<{ lines: string[]; changed: number }>;
+/** Re-reads the math paragraphs (indexes `which`) from a cropped screenshot (JPEG base64). */
+export type MathPass = (
+  imageBase64: string,
+  paragraphs: string[],
+  which: number[],
+) => Promise<{ paragraphs: string[]; changed: number }>;
 
 const MATH_SIGNAL = /[=<>≤≥≠±∑∫√^_&€]|\b[a-zA-Z]\s?\(|[a-zA-Z]\d|\d[a-zA-Z]/;
 
@@ -178,19 +182,11 @@ export class CaptureLoop {
     }
     const t0 = Date.now();
     try {
-      const lines = idx.flatMap((i) => paragraphs[i].split("\n"));
-      const out = await this.opts.mathPass!(jpeg, lines);
-      const result = [...paragraphs];
-      let k = 0;
-      for (const i of idx) {
-        const n = paragraphs[i].split("\n").length;
-        result[i] = out.lines.slice(k, k + n).join("\n");
-        k += n;
-      }
+      const out = await this.opts.mathPass!(jpeg, paragraphs, idx);
       this.stats.mathPasses++;
       this.stats.mathLinesFixed += out.changed;
-      this.log(`math re-read: ${lines.length} lines, fixed ${out.changed} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
-      return result;
+      this.log(`math re-read: ${idx.length} paragraphs, replaced ${out.changed} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+      return out.paragraphs;
     } catch (err) {
       this.stats.mathSkipped++;
       this.log(`math re-read failed: ${(err as Error).message}`);
@@ -317,7 +313,7 @@ export function statsRows(s: CaptureStats, activeMs: number): Record<string, str
     "Lines dropped as repeats": s.duplicate,
     "Lines dropped as noise": s.noise,
     "Math symbols fixed (∈ ℕ ∀ …)": s.mathFixes,
-    "Math re-read by AI": s.mathPasses ? `${s.mathPasses} times, ${s.mathLinesFixed} lines fixed` : "—",
+    "Math re-read by AI": s.mathPasses ? `${s.mathPasses} times, ${s.mathLinesFixed} paragraphs replaced` : "—",
     "Math not re-read": s.mathSkipped,
     "Skipped — not in front long enough": s.dwelling,
     Redactions: s.redactions,

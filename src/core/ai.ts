@@ -408,17 +408,98 @@ Student's answer: ${studentAnswer}
   return { correct: !!out.correct, explanation: out.correct ? "" : (out.explanation ?? "").trim() };
 }
 
-// ---------- math pass ----------
-
-const MATH_SCHEMA = {
-  type: "object",
-  properties: { lines: { type: "array", items: { type: "string" } } },
-  required: ["lines"],
-};
+// ---------- math reading ----------
 
 /**
- * Letters and digits of a line with LaTeX commands removed, for checking a rewrite still says the same
- * thing. Digits count too, so lines that are mostly numbers (1^2 + 2^2 + ...) match the right line.
+ * Math courses use a small model made for reading documents (GLM-OCR, ~4 s per page section), because
+ * Apple's text recognition can't read formulas. It returns Markdown with math as LaTeX ($...$).
+ */
+export const MATH_READER: AiConfig = { baseUrl: DEFAULT_AI.baseUrl, model: "glm-ocr:q8_0" };
+
+/**
+ * Reads an image (JPEG/PNG, base64) into lines of Markdown + LaTeX. The reply is streamed so we can stop
+ * as soon as the model starts repeating itself (small OCR models sometimes loop).
+ */
+export async function readMathImage(imageBase64: string, expectedChars: number, cfg: AiConfig = MATH_READER): Promise<string[]> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 60_000);
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: abort.signal,
+      body: JSON.stringify({
+        model: cfg.model,
+        stream: true,
+        messages: [{ role: "user", content: "Text Recognition:", images: [imageBase64] }],
+        // LaTeX takes ~3 tokens per character of Apple's reading; the stream check below stops loops early.
+        options: { temperature: 0, num_ctx: 8192, num_predict: Math.min(3000, 200 + 3 * expectedChars), stop: ["```"] },
+      }),
+    });
+  } catch {
+    clearTimeout(timer);
+    throw new AiError("not-running", "Ollama isn't running.");
+  }
+  if (!res.ok || !res.body) {
+    clearTimeout(timer);
+    throw new AiError(res.status === 404 ? "model-missing" : "failed", `Math reader error ${res.status}`);
+  }
+  let text = "";
+  let buffer = "";
+  const decoder = new TextDecoder();
+  try {
+    reading: for await (const chunk of res.body) {
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (!line.trim()) continue;
+        const part = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
+        text += part.message?.content ?? "";
+        // A finished line we've already seen means the model is looping: stop here.
+        const lines = text.split("\n");
+        const finished = lines.slice(0, -1).map((l) => l.trim()).filter(Boolean);
+        if (finished.length) {
+          const last = finished[finished.length - 1];
+          const earlier = finished.slice(0, -1);
+          if (last.length > 8 && earlier.includes(last)) {
+            abort.abort();
+            break reading;
+          }
+        }
+        if (part.done) break reading;
+      }
+    }
+  } catch (err) {
+    if (!abort.signal.aborted) throw new AiError("failed", `Math reader failed: ${(err as Error).message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  return splitReading(text);
+}
+
+/**
+ * Splits a reading into lines, dropping code fences and repeated lines (small OCR models sometimes
+ * loop), and tidies inline math like "$ x $" to "$x$". Exported for tests.
+ */
+export function splitReading(content: string): string[] {
+  const seen = new Set<string>();
+  return content
+    .replace(/```[a-z]*\n?/g, "")
+    .split("\n")
+    .map((l) => l.trim().replace(/(?<!\$)\$ +([^$\n]*?) *\$(?!\$)/g, (_m, inner: string) => `$${inner.trim()}$`))
+    .filter((l) => {
+      if (!l || seen.has(l)) return false;
+      seen.add(l);
+      return true;
+    });
+}
+
+/**
+ * Letters and digits of a text with LaTeX commands removed, for checking two readings say the same
+ * thing. Digits count too, so lines that are mostly numbers (1^2 + 2^2 + ...) still compare well.
  */
 export function letterSkeleton(s: string): string {
   return s
@@ -427,73 +508,83 @@ export function letterSkeleton(s: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
-/** How much two lines' letters agree, 0–1 (longest common subsequence over the longer one). */
+/** How much two texts' letters and digits agree, 0–1 (longest common subsequence over the longer one). */
 export function letterAgreement(a: string, b: string): number {
   const x = letterSkeleton(a);
   const y = letterSkeleton(b);
   if (!x || !y) return x === y ? 1 : 0;
-  const dp = Array.from({ length: x.length + 1 }, () => new Array<number>(y.length + 1).fill(0));
-  for (let i = 1; i <= x.length; i++)
-    for (let j = 1; j <= y.length; j++)
-      dp[i][j] = x[i - 1] === y[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-  return dp[x.length][y.length] / Math.max(x.length, y.length);
-}
-
-/** Accept a rewritten line only if its words still match the OCR line: symbols may change, words may not. */
-export function acceptRewrite(original: string, rewritten: string): boolean {
-  const short = letterSkeleton(original).length < 4;
-  return letterAgreement(original, rewritten) >= (short ? 0.5 : 0.75);
+  let prev = new Array<number>(y.length + 1).fill(0);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = new Array<number>(y.length + 1).fill(0);
+    for (let j = 1; j <= y.length; j++) cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    prev = cur;
+  }
+  return prev[y.length] / Math.max(x.length, y.length);
 }
 
 /**
- * Pairs each OCR line with the transcribed line that has the same words, and swaps it in.
- * Lines with no good match stay as they were. Exported for tests.
+ * Replaces Apple's reading of each paragraph in `which` with the math reader's version of the same
+ * paragraph: a run of consecutive read lines whose letters match it. The strongest matches are taken
+ * first, and each read line is used at most once. A paragraph is only replaced when the words agree,
+ * so the reader can fix symbols but can't add text that wasn't on screen; read lines that match
+ * nothing (e.g. old text in the crop) are ignored. Exported for tests.
  */
-export function alignRewrites(ocrLines: string[], transcribed: string[]): { lines: string[]; changed: number } {
-  const used = new Set<number>();
+export function alignParagraphs(
+  ocr: string[],
+  which: number[],
+  read: string[],
+): { paragraphs: string[]; changed: number } {
+  type Candidate = { i: number; start: number; len: number; score: number };
+  const candidates: Candidate[] = [];
+  for (const i of which) {
+    const size = letterSkeleton(ocr[i]).length;
+    const short = size < 15;
+    const maxLen = ocr[i].split("\n").length + 2; // the reader may wrap lines differently
+    for (let start = 0; start < read.length; start++) {
+      for (let len = 1; len <= maxLen && start + len <= read.length; len++) {
+        const run = read.slice(start, start + len).join("\n");
+        const runSize = letterSkeleton(run).length;
+        if (runSize > 2.5 * size + 10) break; // longer runs only get further off
+        const score = letterAgreement(ocr[i], run);
+        if (score >= (short ? 0.45 : 0.6)) candidates.push({ i, start, len, score });
+      }
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  const out = [...ocr];
+  const doneParagraphs = new Set<number>();
+  const usedLines = new Set<number>();
   let changed = 0;
-  let expected = 0; // lines usually appear in the same order, so prefer the next one on a near-tie
-  const lines = ocrLines.map((orig) => {
-    let best = -1;
-    let bestScore = 0;
-    transcribed.forEach((t, j) => {
-      if (used.has(j)) return;
-      const score = letterAgreement(orig, t) - 0.001 * Math.abs(j - expected);
-      if (score > bestScore) [best, bestScore] = [j, score];
-    });
-    if (best < 0 || !acceptRewrite(orig, transcribed[best])) return orig;
-    used.add(best);
-    expected = best + 1;
-    const r = transcribed[best];
-    if (r !== orig) changed++;
-    return r;
-  });
-  return { lines, changed };
+  for (const c of candidates) {
+    if (doneParagraphs.has(c.i)) continue;
+    const lines = Array.from({ length: c.len }, (_, k) => c.start + k);
+    if (lines.some((l) => usedLines.has(l))) continue;
+    doneParagraphs.add(c.i);
+    for (const l of lines) usedLines.add(l);
+    const replacement = read.slice(c.start, c.start + c.len).join("\n");
+    if (replacement !== ocr[c.i]) changed++;
+    out[c.i] = replacement;
+  }
+  // Tiny leftovers Apple split off a formula (e.g. a subscript "i=1" on its own line) are dropped once
+  // the reader has given us the whole formula.
+  if (changed) {
+    for (const i of which) {
+      if (!doneParagraphs.has(i) && letterSkeleton(ocr[i]).length <= 4) out[i] = "";
+    }
+  }
+  return { paragraphs: out.filter((p, i) => p !== "" || ocr[i] === ""), changed };
 }
 
-/**
- * Given a screenshot of the new math (JPEG/PNG, base64) and the lines Apple's OCR read from it, has the
- * model transcribe the image with proper math, then swaps in its version of each line whose words match.
- * The model can fix symbols but can't add content: unmatched or changed-meaning lines are ignored.
- */
-export async function transcribeMath(
+/** Re-reads the math paragraphs (indexes `which`) of a capture from its cropped screenshot. */
+export async function readMathParagraphs(
   imageBase64: string,
-  lines: string[],
-  cfg: AiConfig = DEFAULT_AI,
-): Promise<{ lines: string[]; changed: number }> {
-  const out = await chat<{ lines: string[] }>(cfg, {
-    schema: MATH_SCHEMA,
-    temperature: 0,
-    timeoutMs: 90_000,
-    messages: [
-      {
-        role: "user",
-        images: [imageBase64],
-        content: `Transcribe all text in this image exactly, one line of the image per line. Write math in LaTeX between $...$ (e.g. $x_{k+1} = 2x_k$, $\\sum_{i=1}^{n} i$, $\\sqrt{2}$, $n \\in \\mathbb{N}$, $\\frac{a}{b}$). Do not solve, explain or add anything. If a symbol is unclear, write [unclear].`,
-      },
-    ],
-  });
-  return alignRewrites(lines, (out.lines ?? []).map((l) => String(l).trim()).filter(Boolean));
+  paragraphs: string[],
+  which: number[],
+  cfg: AiConfig = MATH_READER,
+): Promise<{ paragraphs: string[]; changed: number }> {
+  const chars = which.reduce((n, i) => n + paragraphs[i].length, 0);
+  const read = await readMathImage(imageBase64, chars, cfg);
+  return alignParagraphs(paragraphs, which, read);
 }
 
 // ---------- later stages ----------

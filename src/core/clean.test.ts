@@ -138,6 +138,7 @@ test("math fix-ups: ∈, ℕ and ∀ from real misreads", () => {
     ["For all a, b e Z, if a | b", "For all a, b ∈ ℤ, if a | b"],
     ["n EN", "n ∈ ℕ"],
     ["Let x e R.", "Let x ∈ ℝ."],
+    ["(a) We prove (n € C) → (n e D)", "(a) We prove (n € C) → (n e D)"], // C and D are set names here
   ];
   for (const [input, want] of cases) assert.equal(fixMath(input).text, want);
 });

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { acceptRewrite, alignRewrites, ensureMathDelimiters, fixLatexEscapes, tooThin, validateQuestions } from "./ai.ts";
+import { alignParagraphs, ensureMathDelimiters, fixLatexEscapes, splitReading, tooThin, validateQuestions } from "./ai.ts";
 import { looksMathy, unionBox } from "./capture.ts";
 import { StudyDb } from "./db.ts";
 
@@ -15,28 +15,50 @@ test("LaTeX backslashes survive JSON parsing", () => {
   assert.equal(JSON.parse(fixLatexEscapes(String.raw`{"a":"\\frac"}`)).a, String.raw`\frac`); // already escaped
 });
 
-test("math pass swaps in corrected lines only when the words match", () => {
-  const ocr = [
-    "Proposition. For all n e N, 1 + 2 + ... + n=n(n+1)/2.",
-    "Inductive step: assume P(k) holds for some k ≥ 1.",
-    "Ifa bandb| c, then a | c.",
-  ];
-  // The model transcribed the image in its own order, with an extra title line.
-  const model = [
-    "MATH 135 — Lecture 7: Induction",
-    "If $a \\mid b$ and $b \\mid c$, then $a \\mid c$.",
-    "Proposition. For all $n \\in \\mathbb{N}$, $1 + 2 + \\cdots + n = n(n+1)/2$.",
-  ];
-  const r = alignRewrites(ocr, model);
-  assert.equal(r.changed, 2);
-  assert.equal(r.lines[0], model[2]);
-  assert.equal(r.lines[1], ocr[1]); // no match: unchanged
-  assert.equal(r.lines[2], model[1]);
+// Real readings of the same typeset page: Apple's text recognition vs the math reader (GLM-OCR).
+const APPLE = [
+  "Example 4. Let A = {n E Z: 10 | n} and B = {n EZ: 2 | n}. Prove that A C Band B 4 A.",
+  "We prove Vn E L, (n E A) → (n E B). Suppose n = 10k; then n = 2(5k), so n E B.",
+  "The sum of the first n squares is",
+  "[i=N(n + 1)(2n + 1)\nі=1",
+  "and for x, y ≥ O we have \"-Y > Vxy, with equality iff x = y.",
+  "By De Morgan, AU B= AnB, andxk+1= 2xk + 15xk-1 fork ≥ 2.",
+];
+const GLM = splitReading(String.raw`Example 4. Let $A = \{n \in \mathbb{Z}: 10 \mid n\}$ and $B = \{n \in \mathbb{Z}: 2 \mid n\}$. Prove that $A \subseteq B$ and $B \not\subseteq A$.
+
+We prove $\forall n \in \mathbb{Z}, (n \in A) \Rightarrow (n \in B)$. Suppose $n = 10k$; then $n = 2(5k)$, so $n \in B$.
+
+The sum of the first $n$ squares is
+
+$$\sum_{i=1}^{n} i^{2} = \frac{n(n+1)(2n+1)}{6}$$
+
+and for $x, y \geq 0$ we have $\frac{x+y}{2} \geq \sqrt{xy}$, with equality iff $x = y$.
+
+By De Morgan, $\overline{A \cup B} = \overline{A} \cap \overline{B}$, and $x_{k+1} = 2x_{k} + 15x_{k-1}$ for $k \geq 2$.`);
+
+test("math reading replaces each garbled paragraph with its correct version", () => {
+  const all = APPLE.map((_, i) => i);
+  const r = alignParagraphs(APPLE, all, GLM);
+  assert.equal(r.paragraphs[0], GLM[0]);
+  assert.equal(r.paragraphs[1], GLM[1]);
+  assert.equal(r.paragraphs[4], GLM[4]);
+  assert.equal(r.paragraphs[5], GLM[5]);
+  assert.ok(r.changed >= 5, `changed ${r.changed}`);
+  assert.ok(!r.paragraphs.includes("і=1"), "stray subscript fragment dropped");
 });
 
-test("math pass rejects rewrites that change the words", () => {
-  assert.ok(!acceptRewrite("Base case: P(1) holds since 1 = 1(2)/2.", "Base case: P(0) is trivially true by definition of the empty sum."));
-  assert.ok(!acceptRewrite("Then x is even.", "Then x is odd, and so y must be prime."));
+test("math reading ignores text in the crop that wasn't new, and never invents paragraphs", () => {
+  // Only paragraph 4 is new; the reading also contains the (already saved) paragraphs around it.
+  const r = alignParagraphs(APPLE, [4], GLM);
+  assert.deepEqual(r.paragraphs.filter((p, i) => p !== APPLE[i]), [GLM[4]]);
+  // A reading that says something different is rejected.
+  const wrong = alignParagraphs(["Then x is even, so y is odd."], [0], ["Therefore every prime greater than two is odd."]);
+  assert.equal(wrong.changed, 0);
+});
+
+test("readings are split into lines without code fences or repeats", () => {
+  assert.deepEqual(splitReading("```markdown\nA\n\nB\nA\n```"), ["A", "B"]);
+  assert.deepEqual(splitReading("so $ n \\in B. $ and $$x$$"), ["so $n \\in B.$ and $$x$$"]);
 });
 
 test("quiz validation keeps well-formed questions and finds the right option", () => {
