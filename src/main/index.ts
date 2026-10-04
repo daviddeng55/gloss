@@ -444,6 +444,7 @@ async function smokeReview(dir: string) {
   const t0 = Date.now();
   reviews.ensure(id);
   openReview(id);
+  reviewWin!.webContents.on("console-message", (e) => console.log("SMOKE console", e.level, e.message.slice(0, 200)));
   let r = reviews.get(id)!;
   while (r.quiz.status !== "done" && r.quiz.status !== "error" && Date.now() - t0 < 600_000) {
     await wait(2000);

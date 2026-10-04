@@ -72,6 +72,9 @@
 .rich > :last-child { margin-bottom: 0; }
 .rich p { margin: 0.5em 0; line-height: 1.6; }
 .rich .katex { font-size: 1.08em; }
+/* Tailwind sizes every box with "border-box"; KaTeX's layout assumes "content-box". (The big fraction-bar
+   bug was a KaTeX version mismatch: keep `katex` on the same version rehype-katex uses — see `npm ls katex`.) */
+.katex, .katex * { box-sizing: content-box; }
 .rich ul, .rich ol { margin: 0.5em 0; padding-left: 1.4em; }
 .rich ul { list-style: disc; }
 .rich ol { list-style: decimal; }
