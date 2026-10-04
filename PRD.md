@@ -33,7 +33,7 @@ Study Buddy is a small Mac menu bar app, **for my own personal use**.
 - **Session memory:** the text is cleaned, split into chunks, and saved in a local SQLite database, tagged with the course, the session and the time.
 - **Course memory:** all sessions for a course add up over time, so the app knows what I've covered so far.
 - **AI:** local models through **Ollama** (`http://localhost:11434`) by default. A cloud provider is an optional setting.
-- **App:** Electron menu bar app with hotkeys and a popup.
+- **App:** Electron menu bar app with a hold-to-ask key, an overlay and a popup.
 
 ---
 
@@ -99,14 +99,36 @@ When I end a session:
 
 **Done when:** after a real 30-minute session, the summary matches what I studied and the quiz questions are answerable from that material.
 
-## 7. Stage 4 — Hover and ask
-- Global hotkey (default `Cmd+Shift+A`) during a session.
-- Capture the screen and crop the area around my cursor (about 900×700 points, configurable).
-- A small question box appears near the cursor. I type my question and press Enter.
-- Send the cropped image, the question, the course, and the most relevant text from this session to a **vision-capable model**.
-- Answer streams into the popup, with a thumbnail of exactly what was sent.
-- **Hint ladder buttons:** Nudge → Explain the concept → Worked example of a similar problem.
-- Questions I ask are saved to the session, and the topic is more likely to appear in the quiz.
+## 7. Stage 4 — Hover and ask (circle and ask)
+**Trigger.** During a session I **hold the right Cmd key**. While it's held:
+- a transparent overlay appears and draws the path my cursor makes, so I can circle what I'm asking about;
+- the microphone listens (step 2), with a clear "listening" indicator.
+
+Releasing the key finishes and sends.
+- If I press any other key during the hold, ignore it (normal Cmd shortcuts keep working). Ignore holds shorter than about 0.3 s. **Esc** cancels.
+- Only works while a session is running, and respects the never-record list.
+- The trigger is configurable; a regular two-key shortcut (default `Cmd+Shift+A`) is the fallback.
+
+**What's sent.** Crop the screenshot to the bounding box of the path I circled, with a little padding. If I didn't circle anything, crop about 900×700 points around the cursor (configurable).
+
+**Voice.** My speech becomes text with macOS's built-in **on-device** speech recognition, through the existing Swift helper. No new model downloads. The microphone is on only while the key is held.
+
+**Popup** near the cursor with:
+- the recognised question — editable, and I can type instead of speaking;
+- a thumbnail of exactly what was sent;
+- the answer streaming in, with math in KaTeX.
+
+Send the cropped image, the question, the course and the most relevant text from this session to a **vision-capable model**.
+- **Hint ladder buttons:** Nudge → Explain the concept → Worked example of a similar problem. Tutor rules (section 9) apply.
+- Questions I ask are saved to the session, and their topics are more likely to appear in the quiz.
+
+**Performance.** Load the model only when I ask something and unload it after a few minutes idle. Never have two models loaded at once.
+
+**Permissions** (walk me through each when first needed): Input Monitoring (the right-Cmd hold), Microphone and Speech Recognition (voice).
+
+**Build in two steps, and stop after each for testing:**
+1. Hold right Cmd, circle, typed question, answer.
+2. Add voice.
 
 ## 8. Stage 5 — Memory across sessions
 - Create an **embedding** for each chunk with a small local embedding model, so the app can search past sessions by meaning.
@@ -142,6 +164,7 @@ When I end a session:
 - **Electron + TypeScript.** Main process: tray, hotkeys, capture loop, database, AI calls. Renderer: popup and history UI.
 - **UI:** React + Tailwind CSS, KaTeX for math. Clean and minimal, light and dark mode.
 - **Text recognition:** macOS Vision framework (see Stage 1).
+- **Speech recognition (Stage 4 only):** macOS's on-device speech recognition (Speech framework) in the Swift helper.
 - **Database:** SQLite (e.g. `better-sqlite3`) in the app's user-data folder. Embeddings stored with chunks, with a simple in-app similarity search. Ask me before adding a separate vector database.
 - **AI:** one module, `lib/ai.ts`, with `summarizeSession()`, `makeQuiz()`, `checkAnswer()`, `askAboutImage()` and `embed()`.
   - Default: **Ollama**. Prefer one small multimodal model for text and images plus one small embedding model, so it all fits comfortably in 16 GB alongside my other apps. Check Ollama's library for current options and tell me what you chose and why.
@@ -195,7 +218,7 @@ type QuizItem = {
 ## 13. Out of scope (for now)
 - Recording outside of sessions
 - Audio or lecture transcription
-- Voice input and spoken answers
+- Spoken answers, and voice input anywhere except asking a question (Stage 4)
 - Anyone else using it, accounts, syncing
 - Windows support
 
