@@ -9,6 +9,7 @@ import type { StudyDb } from "../core/db.ts";
 import type { VisionHelper } from "../core/helper.ts";
 import { blockedReason, pickFrontWindow, type NeverRecord } from "../core/privacy.ts";
 import type { Settings } from "../core/settings.ts";
+import { VoiceHelper } from "../core/voice.ts";
 import type { AskEvent, AskInfo, OverlayEvent } from "../shared/types.ts";
 
 /** What the ask feature needs from the running session. */
@@ -55,10 +56,16 @@ export class AskController {
   private overlayReady: Promise<void> = Promise.resolve();
   private overlayBounds = { x: 0, y: 0, width: 0, height: 0 };
   private asks = new Map<string, Ask>();
+  private voice: VoiceHelper | null = null;
+  private voiceReady = false; // permissions granted and on-device recognition available
+  private listening = false;
+  private smokeSpoken = ""; // development check: pretend this was said
+  private offVoice: (() => void) | null = null;
   private deps: {
     db: StudyDb;
     preload: string;
     load: (win: BrowserWindow, route: string) => void;
+    voicePaths: { visionHelper: string; voice: string };
   };
 
   constructor(settings: Settings, deps: AskController["deps"]) {
@@ -74,6 +81,7 @@ export class AskController {
     this.settings = settings;
     // Create the overlay now (hidden) so it's loaded and ready the moment you press the shortcut.
     if (!this.overlay) this.overlay = this.makeOverlay();
+    if (settings.ask.voice) void this.setUpVoice(settings.ask.locale);
     const accel = settings.ask.shortcut;
     try {
       if (globalShortcut.register(accel, () => this.onShortcut())) return null;
@@ -83,7 +91,42 @@ export class AskController {
     return `The ask shortcut "${accel}" couldn't be set up (another app may use it). Change "shortcut" in settings.json.`;
   }
 
+  /**
+   * Starts Study Buddy Voice and, the first time, asks macOS for Microphone and Speech Recognition
+   * permission. Voice stays off (typing still works) if either is refused.
+   */
+  private async setUpVoice(locale: string) {
+    try {
+      this.voice = new VoiceHelper(this.deps.voicePaths);
+      this.offVoice = this.voice.onEvent((e) => {
+        if (!this.listening) return;
+        if (e.event === "partial") this.send({ type: "speech", text: e.text });
+        else this.send({ type: "level", value: e.value });
+      });
+      let st = await this.voice.status(locale);
+      if (st.mic === "not-asked" || st.speech === "not-asked") st = await this.voice.requestPermission();
+      if (st.mic !== "granted" || st.speech !== "granted") {
+        const missing = [st.mic !== "granted" && "Microphone", st.speech !== "granted" && "Speech Recognition"].filter(Boolean).join(" and ");
+        this.notify(`Voice is off: ${missing} permission for "Study Buddy Voice" isn't on. You can still type questions.`);
+        return;
+      }
+      if (!(await this.voice.status(locale)).onDevice) {
+        this.notify("Voice is off: on-device speech recognition isn't set up. Turn on Dictation once in System Settings → Keyboard.");
+        return;
+      }
+      this.voiceReady = true;
+    } catch (err) {
+      console.log(`[ask] voice unavailable: ${(err as Error).message}`);
+    }
+  }
+
   endSession() {
+    if (this.listening) void this.voice?.cancel().catch(() => {});
+    this.listening = false;
+    this.offVoice?.();
+    this.voice?.close();
+    this.voice = null;
+    this.voiceReady = false;
     if (this.tracking) this.stopTracking();
     try {
       globalShortcut.unregister(this.settings.ask.shortcut);
@@ -130,6 +173,19 @@ export class AskController {
     this.path = [cursor];
     this.overlay.showInactive();
     this.send({ type: "start", shortcutLabel: shortcutLabel(this.settings.ask.shortcut) });
+    // Microphone on, only until this question is sent or cancelled.
+    if (this.voice && this.voiceReady) {
+      this.voice
+        .start(this.settings.ask.locale)
+        .then(() => {
+          if (!this.tracking) return void this.voice?.cancel().catch(() => {}); // cancelled meanwhile
+          this.listening = true;
+          this.send({ type: "voice", state: "listening" });
+        })
+        .catch((err) => this.send({ type: "voice", state: "unavailable", message: (err as Error).message }));
+    } else {
+      this.send({ type: "voice", state: "off" });
+    }
     try {
       globalShortcut.register("Escape", () => this.cancel());
     } catch {
@@ -189,7 +245,10 @@ export class AskController {
   }
 
   cancel() {
-    if (this.tracking) this.stopTracking();
+    if (!this.tracking) return;
+    if (this.listening) void this.voice?.cancel().catch(() => {}); // microphone off, words thrown away
+    this.listening = false;
+    this.stopTracking();
   }
 
   /** Development check: circle along `path` (global points) as if the shortcut were pressed twice. */
@@ -200,6 +259,10 @@ export class AskController {
     this.send({ type: "path", points: path.map((q) => ({ x: q.x - this.overlayBounds.x, y: q.y - this.overlayBounds.y })) });
     if (this.poll) clearInterval(this.poll); // keep the pretend path instead of the real cursor
     this.poll = null;
+    // Pretend voice: show the listening panel as it would look mid-question.
+    this.send({ type: "voice", state: "listening" });
+    this.send({ type: "level", value: 0.7 });
+    this.send({ type: "speech", text: "how do I find the limit of this sequence" });
     await new Promise((r) => setTimeout(r, 800));
     const { writeFileSync } = await import("node:fs");
     writeFileSync(`${dir}/overlay.png`, (await this.overlay!.webContents.capturePage()).toPNG());
@@ -213,7 +276,9 @@ export class AskController {
       })()`),
     );
     const before = new Set(this.asks.keys());
+    this.smokeSpoken = "how do I find the limit of this sequence";
     await this.finish();
+    this.smokeSpoken = "";
     return [...this.asks.keys()].find((k) => !before.has(k)) ?? null;
   }
 
@@ -230,8 +295,11 @@ export class AskController {
     if (!s || !this.tracking) return;
     const cursor = this.poll ? screen.getCursorScreenPoint() : this.path[this.path.length - 1];
     const path = [...this.path];
+    // Microphone off now; the last words finish recognizing while the screen is captured.
+    const spoken = this.listening && this.voice ? this.voice.stop().catch(() => "") : Promise.resolve(this.smokeSpoken);
+    this.listening = false;
     this.stopTracking();
-    await new Promise((r) => setTimeout(r, 150)); // let the overlay leave the screen before capturing
+    await new Promise((r) => setTimeout(r, 250)); // let the overlay leave the screen before capturing
     const display = screen.getDisplayNearestPoint(cursor);
     const { rect, circled } = cropFor(path, cursor, {
       x: display.bounds.x,
@@ -245,15 +313,15 @@ export class AskController {
       const blocked = windows
         .filter((w) => w.pid !== process.pid && blockedReason(w, s.neverRecord, s.projectName))
         .map((w) => w.windowId);
-      const shot = await s.helper.snap({
-        x: cursor.x,
-        y: cursor.y,
-        rect,
-        excludePids: [process.pid],
-        excludeWindowIds: blocked,
-      });
+      // The screen sometimes captures as solid black just after the overlay closes: try again briefly.
+      let shot = await s.helper.snap({ x: cursor.x, y: cursor.y, rect, excludePids: [process.pid], excludeWindowIds: blocked });
+      for (let attempt = 0; shot.black && attempt < 3; attempt++) {
+        await new Promise((r) => setTimeout(r, 200));
+        shot = await s.helper.snap({ x: cursor.x, y: cursor.y, rect, excludePids: [process.pid], excludeWindowIds: blocked });
+      }
+      if (shot.black) console.log("[ask] the capture is still black after retries");
       const front = pickFrontWindow(windows.filter((w) => w.pid !== process.pid));
-      this.openAsk(s, shot.jpeg, circled, front?.title ?? "", cursor);
+      this.openAsk(s, shot.jpeg, circled, front?.title ?? "", cursor, await spoken);
     } catch (err) {
       this.notify(`Couldn't capture the screen: ${(err as Error).message}`);
     }
@@ -261,7 +329,7 @@ export class AskController {
 
   // ---------- the ask popup ----------
 
-  private openAsk(s: AskSession, jpeg: string, circled: boolean, sourceTitle: string, near: Point) {
+  private openAsk(s: AskSession, jpeg: string, circled: boolean, sourceTitle: string, near: Point, spoken = "") {
     const askId = randomUUID();
     const area = screen.getDisplayNearestPoint(near).workArea;
     const x = Math.min(Math.max(near.x + 16, area.x + 8), area.x + area.width - ASK_SIZE.width - 8);
@@ -294,6 +362,8 @@ export class AskController {
     win.once("ready-to-show", () => {
       win.show();
       win.focus();
+      // A spoken question is asked straight away (you can still edit it and ask again).
+      if (spoken) setTimeout(() => void this.ask(askId, spoken, "nudge"), 150);
     });
     this.deps.load(win, `ask/${askId}`);
   }
@@ -315,7 +385,11 @@ export class AskController {
     };
     emit({ askId, type: "start", turn, level, question: q });
     try {
-      if (!a.questionId) a.questionId = this.deps.db.addQuestion(a.sessionId, a.courseId, q, a.info.sourceTitle);
+      // A new or edited question is saved as its own question; hint-ladder follow-ups add answers to it.
+      const previous = a.turns[a.turns.length - 1]?.question;
+      if (!a.questionId || (previous !== undefined && previous !== q)) {
+        a.questionId = this.deps.db.addQuestion(a.sessionId, a.courseId, q, a.info.sourceTitle);
+      }
       const passages = relevantPassages(q, this.deps.db.getPassages(a.sessionId));
       const answer = await askAboutImage(
         {

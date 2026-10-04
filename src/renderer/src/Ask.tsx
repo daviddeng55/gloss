@@ -17,6 +17,7 @@ export default function Ask({ askId }: { askId: string }) {
   const [asked, setAsked] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [bigImage, setBigImage] = useState(false);
+  const [editing, setEditing] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const busy = turns.some((t) => t.status === "streaming");
@@ -57,7 +58,7 @@ export default function Ask({ askId }: { askId: string }) {
 
   function send(level: HintLevelId, q = asked || question) {
     if (busy || !q.trim()) return;
-    if (!asked) setAsked(q.trim());
+    setAsked(q.trim());
     void window.api.ask(askId, q.trim(), level);
   }
 
@@ -117,7 +118,34 @@ export default function Ask({ askId }: { askId: string }) {
           </form>
         ) : (
           <div className="flex flex-col gap-4">
-            <p className="selectable rounded-xl bg-accent-soft/60 px-3 py-2 font-serif text-[16px]">{asked}</p>
+            {editing ? (
+              <textarea
+                autoFocus
+                defaultValue={asked}
+                rows={3}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    setEditing(false);
+                    send("nudge", e.currentTarget.value);
+                  }
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setEditing(false);
+                  }
+                }}
+                className="selectable rounded-xl border border-accent bg-card px-3 py-2 font-serif text-[16px] outline-none ring-2 ring-accent/25"
+              />
+            ) : (
+              <button
+                onClick={() => !busy && setEditing(true)}
+                className="group rounded-xl bg-accent-soft/60 px-3 py-2 text-left font-serif text-[16px]"
+                title="Edit your question and ask again"
+              >
+                {asked}
+                <span className="ml-2 font-sans text-xs text-accent opacity-0 group-hover:opacity-100">Edit</span>
+              </button>
+            )}
             {turns.map((t, i) => (
               <div key={i} className="rounded-2xl border border-line bg-card p-4 shadow-sm">
                 <p className="mb-2 text-xs font-bold tracking-wide text-accent">{LEVELS.find((l) => l.id === t.level)?.label}</p>

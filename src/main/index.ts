@@ -171,7 +171,8 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
       projectName: basename(ROOT),
       isPaused: () => current?.loop.status === "paused",
     },
-    loadSettings(fromRoot("settings.json")),
+    // Development checks never trigger the real microphone/speech permission prompts.
+    ((st) => (process.env.STUDY_BUDDY_SMOKE_ASK ? { ask: { ...st.ask, voice: false } } : st))(loadSettings(fromRoot("settings.json"))),
   );
   if (askProblem) console.log(`[ask] ${askProblem}`);
   popup?.hide();
@@ -369,7 +370,12 @@ app.whenReady().then(() => {
   reviews = new ReviewService(db, loadCourses, (sessionId) => {
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
   });
-  asker = new AskController(loadSettings(fromRoot("settings.json")), { db, preload, load });
+  asker = new AskController(loadSettings(fromRoot("settings.json")), {
+    db,
+    preload,
+    load,
+    voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Study Buddy Voice") },
+  });
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
@@ -523,10 +529,14 @@ async function smokeAsk(dir: string) {
   console.log("SMOKE ask window", askId ? "opened" : "NOT opened", JSON.stringify(askId ? { ...asker.info(askId), thumbnail: asker.info(askId)!.thumbnail.length + " chars" } : null));
   if (!askId) return app.quit();
   writeFileSync(join(dir, "sent.jpg"), Buffer.from(asker.info(askId)!.thumbnail.split(",")[1], "base64"));
-  await wait(1500);
+  // The spoken question is asked automatically; wait for that answer.
   const t0 = Date.now();
-  await asker.ask(askId, "What is shown here, in one or two sentences?", "nudge");
-  console.log("SMOKE answered in", Math.round((Date.now() - t0) / 1000), "s");
+  for (let i = 0; i < 120; i++) {
+    await wait(500);
+    const qs = db.getQuestions(current!.sessionId);
+    if (qs[0]?.answers.length) break;
+  }
+  console.log("SMOKE spoken question answered in", Math.round((Date.now() - t0) / 1000), "s");
   const ps = (await (await fetch("http://localhost:11434/api/ps")).json()) as { models: { name: string }[] };
   console.log("SMOKE models loaded:", ps.models.map((m) => m.name).join(", "));
   await wait(800);

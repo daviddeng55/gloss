@@ -6,10 +6,12 @@ export type Settings = {
   ask: CropOptions & {
     /** Press to start circling, press again (or click) to send. Electron accelerator syntax; "Alt" = Option. */
     shortcut: string;
+    voice: boolean; // listen for a spoken question while circling
+    locale: string; // speech recognition language, e.g. "en-US"
   };
 };
 
-export const DEFAULT_SETTINGS_FILE: Settings = { ask: { shortcut: "Alt+A", ...DEFAULT_CROP } };
+export const DEFAULT_SETTINGS_FILE: Settings = { ask: { shortcut: "Alt+A", voice: true, locale: "en-US", ...DEFAULT_CROP } };
 
 export function loadSettings(path: string): Settings {
   if (!existsSync(path)) return DEFAULT_SETTINGS_FILE;

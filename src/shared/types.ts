@@ -80,7 +80,10 @@ export type AskInfo = {
 export type OverlayEvent =
   | { type: "start"; shortcutLabel: string }
   | { type: "path"; points: { x: number; y: number }[] }
-  | { type: "end" };
+  | { type: "end" }
+  | { type: "voice"; state: "listening" | "off" | "unavailable"; message?: string }
+  | { type: "speech"; text: string }
+  | { type: "level"; value: number };
 
 export type HintLevelId = "nudge" | "explain" | "example";
 

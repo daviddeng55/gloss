@@ -28,6 +28,14 @@ model from a cropped screenshot (at most every 45 s), which fixes symbols Apple'
 
 Sessions and their text are saved in `~/Library/Application Support/Study Buddy/study-buddy.db`.
 
+### Circle and ask (during a session)
+Press **Option+A**, circle what you're asking about (and say your question out loud), then press
+**Option+A** again or click. A popup shows exactly what was sent and the answer, with buttons for a
+Nudge, an explanation of the concept, or a worked example of a similar problem. **Esc** cancels.
+The microphone is on only between the two presses; speech is turned into text on your Mac
+("Study Buddy Voice" needs Microphone and Speech Recognition permission). Change the shortcut or turn
+voice off in `settings.json`.
+
 ### AI (Ollama)
 The AI runs on your Mac through [Ollama](https://ollama.com) — nothing is sent online.
 Ollama must be running (it lives in the menu bar) with the model downloaded: `ollama pull qwen3.5:4b`.

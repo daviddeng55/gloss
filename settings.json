@@ -1,6 +1,8 @@
 {
   "ask": {
     "shortcut": "Alt+A",
+    "voice": true,
+    "locale": "en-US",
     "fallbackW": 900,
     "fallbackH": 700,
     "padding": 24,

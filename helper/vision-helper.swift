@@ -24,6 +24,36 @@ import Vision
 
 // MARK: - JSON in/out
 
+// MARK: - Launching Study Buddy Voice as its own app
+
+// `vision-helper --disclaim <program> [args]` starts <program> so that macOS treats it as responsible
+// for itself (rather than VS Code or Terminal). Then macOS asks permission for that program by name,
+// using the reasons in its own Info.plist. Standard input/output are passed straight through.
+var disclaimedChild: pid_t = 0
+
+func runDisclaimed(_ args: [String]) -> Int32 {
+    var attr: posix_spawnattr_t?
+    posix_spawnattr_init(&attr)
+    typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+    if let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_spawnattrs_setdisclaim") {
+        _ = unsafeBitCast(sym, to: Disclaim.self)(&attr, 1)
+    }
+    let argv: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) } + [nil]
+    let rc = posix_spawn(&disclaimedChild, args[0], nil, &attr, argv, environ)
+    if rc != 0 {
+        FileHandle.standardError.write("could not start \(args[0]): \(rc)\n".data(using: .utf8)!)
+        return 1
+    }
+    signal(SIGTERM) { _ in kill(disclaimedChild, SIGTERM) }
+    var status: Int32 = 0
+    waitpid(disclaimedChild, &status, 0)
+    return status == 0 ? 0 : 1
+}
+
+if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--disclaim" {
+    exit(runDisclaimed(Array(CommandLine.arguments.dropFirst(2))))
+}
+
 let outputLock = NSLock()
 
 /// Writes one JSON line. Replies can come from different threads, so writes are locked.
@@ -343,7 +373,10 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
                 "w": (r["w"] ?? f.width) / f.width, "h": (r["h"] ?? f.height) / f.height,
             ]
             let out = try jpegBase64(image, rect: frac, maxWidth: req["maxWidth"] as? Int ?? 1600)
-            return ["ok": true].merging(out) { a, _ in a }
+            // Right after a window closes the screen can briefly capture as solid black; say so, so the
+            // caller can try again.
+            let black = (thumbnail(image).max() ?? 0) < 8
+            return ["ok": true, "black": black].merging(out) { a, _ in a }
 
         case "forgetImage":
             lastImage = nil

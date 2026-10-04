@@ -135,7 +135,7 @@ export class VisionHelper {
     excludePids?: number[];
     excludeWindowIds?: number[];
     maxWidth?: number;
-  }): Promise<{ jpeg: string; width: number; height: number }> {
+  }): Promise<{ jpeg: string; width: number; height: number; black: boolean }> {
     return this.request("snap", args);
   }
 
