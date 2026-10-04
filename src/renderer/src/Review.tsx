@@ -1,6 +1,7 @@
 // End-of-session review: what you covered, then a short quiz on it.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AnswerResult, QuizItemView, ReviewData } from "../../shared/types.ts";
+import { plainMathToLatex } from "../../shared/mathText.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
 import Rich from "./Rich.tsx";
 
@@ -16,27 +17,27 @@ export default function Review({ sessionId }: { sessionId: string }) {
   if (!data) return <div className="drag h-12" />;
 
   return (
-    <div className="flex h-screen flex-col text-[14px] text-neutral-900 dark:text-neutral-100">
+    <div className="flex h-screen flex-col text-[14px] text-ink">
       <div className="drag h-12 shrink-0" />
       <div className="flex-1 overflow-y-auto px-8 pb-12">
         <div className="mx-auto max-w-2xl">
           <header className="mb-8">
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            <p className="text-sm text-muted">
               {dateFmt.format(new Date(data.startedAt))} · {timeFmt.format(new Date(data.startedAt))}
             </p>
-            <h1 className="text-2xl font-semibold">
+            <h1 className="text-[28px] leading-tight font-bold tracking-tight">
               {data.courseName} · {duration(data.activeMs)} studied
             </h1>
-            {data.goal ? <p className="mt-1 text-neutral-600 dark:text-neutral-300">Goal: {data.goal}</p> : null}
+            {data.goal ? <p className="mt-1 text-muted">Goal: {data.goal}</p> : null}
           </header>
 
           <section className="mb-10">
-            <h2 className="mb-3 text-lg font-semibold">What you covered</h2>
+            <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">What you covered</h2>
             <SummaryView data={data} onRetry={() => void window.api.retryReview(sessionId)} />
           </section>
 
           <section>
-            <h2 className="mb-3 text-lg font-semibold">Quiz</h2>
+            <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">Quiz</h2>
             <QuizView data={data} onRetry={() => void window.api.retryReview(sessionId)} reload={load} />
           </section>
         </div>
@@ -47,7 +48,7 @@ export default function Review({ sessionId }: { sessionId: string }) {
 
 function Working({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl bg-black/5 px-4 py-3 text-neutral-600 dark:bg-white/10 dark:text-neutral-300">
+    <div className="flex items-center gap-3 rounded-2xl bg-card px-4 py-3 text-muted shadow-sm">
       <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />
       <span>{children}</span>
     </div>
@@ -70,13 +71,13 @@ function Problem({ message, onRetry }: { message: string; onRetry?: () => void }
 /** A passage's text, shown when you click a source link. */
 function Source({ data, chunkId }: { data: ReviewData; chunkId: string }) {
   const p = data.passages[chunkId];
-  if (!p) return <p className="text-sm text-neutral-500">That passage was deleted.</p>;
+  if (!p) return <p className="text-sm text-muted">That passage was deleted.</p>;
   return (
-    <div className="mt-2 rounded-lg border border-black/10 px-3 py-2 text-[13px] dark:border-white/15">
-      <p className="mb-1 truncate text-xs text-neutral-500 dark:text-neutral-400">
+    <div className="mt-2 rounded-xl border border-line bg-paper px-3 py-2 text-[14px]">
+      <p className="mb-1 truncate text-xs text-muted">
         {timeFmt.format(new Date(p.capturedAt))} · {p.sourceTitle || "unknown window"}
       </p>
-      <Rich text={p.text} keepLines />
+      <Rich text={p.text} keepLines className="font-serif" />
     </div>
   );
 }
@@ -92,9 +93,9 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
     <ol className="space-y-3">
       {summary.points.map((pt, i) => (
         <li key={i} className="flex gap-3">
-          <span className="mt-0.5 text-sm font-semibold text-neutral-400 tabular-nums">{i + 1}</span>
+          <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[13px] font-bold text-accent-strong tabular-nums">{i + 1}</span>
           <div className="min-w-0 flex-1">
-            <Rich text={pt.text} />
+            <Rich text={plainMathToLatex(pt.text)} className="font-serif text-[17px]" />
             {pt.passageIds.length ? (
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {pt.passageIds.map((id, j) => {
@@ -103,7 +104,7 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
                     <button
                       key={id}
                       onClick={() => setOpen(open === key ? null : key)}
-                      className={`rounded-md px-2 py-0.5 text-xs ${open === key ? "bg-blue-600 text-white" : "bg-black/5 text-neutral-600 hover:bg-black/10 dark:bg-white/10 dark:text-neutral-300"}`}
+                      className={`rounded-md px-2 py-0.5 text-xs ${open === key ? "bg-accent text-white" : "bg-accent-soft text-accent-strong hover:brightness-95"}`}
                     >
                       Source {pt.passageIds.length > 1 ? j + 1 : ""}
                     </button>
@@ -181,11 +182,11 @@ function Question(props: {
   }
 
   return (
-    <div className="rounded-xl border border-black/10 p-5 dark:border-white/15">
-      <p className="mb-2 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+    <div className="rounded-2xl border border-line bg-card p-5 shadow-sm">
+      <p className="mb-2 text-xs font-medium text-muted">
         Question {number} of {total} · {item.type === "multiple_choice" ? "Multiple choice" : "Short answer"}
       </p>
-      <Rich text={item.question} className="mb-4 text-[15px] font-medium" />
+      <Rich text={item.question} className="mb-4 font-serif text-[18px] leading-snug" />
 
       {item.type === "multiple_choice" ? (
         <div className="flex flex-col gap-2">
@@ -200,13 +201,13 @@ function Question(props: {
                 onClick={() => void submit(opt)}
                 className={`rounded-lg border px-3 py-2 text-left transition-colors ${
                   right
-                    ? "border-green-600 bg-green-600/15"
+                    ? "border-good bg-good/15"
                     : wrong
-                      ? "border-red-600 bg-red-600/15"
-                      : "border-black/10 enabled:hover:bg-black/5 dark:border-white/15 dark:enabled:hover:bg-white/10"
+                      ? "border-bad bg-bad/15"
+                      : "border-line bg-paper enabled:hover:bg-accent-soft"
                 }`}
               >
-                <Rich text={opt} />
+                <Rich text={opt} className="font-serif text-[16px]" />
               </button>
             );
           })}
@@ -235,13 +236,13 @@ function Question(props: {
             rows={3}
             placeholder="Your answer (typing sqrt(x), x^2 or sum works too)"
             autoFocus
-            className="selectable rounded-lg border border-black/10 bg-transparent px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 disabled:opacity-70 dark:border-white/15"
+            className="selectable rounded-xl border border-line bg-paper px-3 py-2 outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 disabled:opacity-70"
           />
           {!result ? (
             <button
               onClick={() => void submit(response)}
               disabled={checking || !response.trim()}
-              className="self-start rounded-lg bg-blue-600 px-4 py-1.5 font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+              className="self-start rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong disabled:opacity-40"
             >
               {checking ? "Checking…" : "Check answer"}
             </button>
@@ -252,26 +253,26 @@ function Question(props: {
       {failed ? <div className="mt-3"><Problem message={failed} onRetry={() => void submit(response)} /></div> : null}
 
       {result ? (
-        <div className={`mt-4 rounded-lg px-4 py-3 ${result.correct ? "bg-green-600/15" : "bg-red-600/15"}`}>
+        <div className={`mt-4 rounded-lg px-4 py-3 ${result.correct ? "bg-good/15" : "bg-bad/15"}`}>
           <p className="font-semibold">{result.correct ? "✓ Correct" : "✗ Not quite"}</p>
           {!result.correct ? (
             <div className="mt-1">
-              <span className="text-neutral-600 dark:text-neutral-300">Answer: </span>
-              <Rich text={result.answer} className="inline-block align-top" />
+              <span className="text-muted">Answer: </span>
+              <Rich text={result.answer} className="inline-block align-top font-serif" />
             </div>
           ) : null}
-          {result.explanation ? <Rich text={result.explanation} className="mt-2" /> : null}
+          {result.explanation ? <Rich text={result.explanation} className="mt-2 font-serif" /> : null}
         </div>
       ) : null}
 
       <div className="mt-4 flex items-center justify-between gap-3">
         {item.chunkId ? (
-          <button onClick={() => setShowSource(!showSource)} className="text-sm text-blue-600 hover:underline dark:text-blue-400">
+          <button onClick={() => setShowSource(!showSource)} className="text-sm text-accent hover:underline">
             {showSource ? "Hide source" : "Show source"}
           </button>
         ) : <span />}
         {result ? (
-          <button onClick={props.onNext} className="rounded-lg bg-blue-600 px-4 py-1.5 font-semibold text-white hover:bg-blue-700">
+          <button onClick={props.onNext} className="rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong">
             {number === total ? "See results" : "Next question"}
           </button>
         ) : null}
@@ -294,7 +295,7 @@ function SymbolBar({ onInsert, disabled }: { onInsert: (s: string) => void; disa
           disabled={disabled}
           onMouseDown={(e) => e.preventDefault()} // keep the cursor in the answer box
           onClick={() => onInsert(sym)}
-          className="min-w-7 rounded-md bg-black/5 px-1.5 py-0.5 text-[14px] hover:bg-black/10 disabled:opacity-40 dark:bg-white/10 dark:hover:bg-white/20"
+          className="min-w-7 rounded-md bg-accent-soft px-1.5 py-0.5 font-serif text-[15px] hover:brightness-95 disabled:opacity-40"
           title={`Insert ${sym}`}
         >
           {sym}
@@ -307,24 +308,24 @@ function SymbolBar({ onInsert, disabled }: { onInsert: (s: string) => void; disa
 function Results({ items }: { items: QuizItemView[] }) {
   const correct = items.filter((q) => q.answered?.correct).length;
   return (
-    <div className="rounded-xl border border-black/10 p-5 dark:border-white/15">
+    <div className="rounded-2xl border border-line bg-card p-5 shadow-sm">
       <p className="text-xl font-semibold">
         You got {correct} of {items.length}
       </p>
-      <p className="mb-4 text-neutral-500 dark:text-neutral-400">
+      <p className="mb-4 text-muted">
         {correct === items.length ? "Nice work." : "Go back through the sources for the ones you missed."}
       </p>
       <ol className="space-y-2">
         {items.map((q) => (
           <li key={q.id} className="flex gap-2">
-            <span className={q.answered?.correct ? "text-green-600" : "text-red-600"}>{q.answered?.correct ? "✓" : "✗"}</span>
-            <Rich text={q.question} className="min-w-0 flex-1" />
+            <span className={q.answered?.correct ? "text-good" : "text-bad"}>{q.answered?.correct ? "✓" : "✗"}</span>
+            <Rich text={q.question} className="min-w-0 flex-1 font-serif" />
           </li>
         ))}
       </ol>
       <button
         onClick={() => void window.api.closeWindow()}
-        className="mt-5 rounded-lg bg-blue-600 px-4 py-1.5 font-semibold text-white hover:bg-blue-700"
+        className="mt-5 rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong"
       >
         Done
       </button>

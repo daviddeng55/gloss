@@ -7,7 +7,7 @@ import "./index.css";
 
 // One page, three screens: #/start (the menu bar popup), #/history and #/review/<session id>.
 const [route, param] = location.hash.replace(/^#\/?/, "").split("/");
-document.body.className = route === "start" ? "bg-transparent" : "bg-white dark:bg-neutral-900";
+document.body.className = route === "start" ? "bg-transparent" : "bg-paper";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

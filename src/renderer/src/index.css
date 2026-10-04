@@ -1,10 +1,56 @@
 @import "tailwindcss";
 
+/*
+ * "Study notebook" look: rounded type for headings and controls, a book-style serif for anything
+ * you read (notes, summaries, questions), warm paper colours and a terracotta accent.
+ * Fonts are built into macOS (".SF NS Rounded" = SF Pro Rounded, ".New York" = New York), with fallbacks.
+ */
+@theme {
+  --font-sans: ".SF NS Rounded", "Avenir Next", system-ui, sans-serif;
+  --font-serif: ".New York", "Iowan Old Style", Charter, Georgia, serif;
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-bad: var(--bad);
+}
+
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --paper: #f7f3ec;
+  --card: #fffdf9;
+  --ink: #2b2620;
+  --muted: #7a6f63;
+  --line: #e6ddd0;
+  --accent: #c0532b;
+  --accent-strong: #a3431f;
+  --accent-soft: #f6e3d8;
+  --good: #3f7d4e;
+  --bad: #b3412f;
+  font-family: var(--font-sans);
+  color: var(--ink);
   -webkit-font-smoothing: antialiased;
   user-select: none;
   cursor: default;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1d1a17;
+    --card: #282420;
+    --ink: #eee7dc;
+    --muted: #a3988a;
+    --line: #3a342d;
+    --accent: #e0794f;
+    --accent-strong: #ec8c63;
+    --accent-soft: #3d2a20;
+    --good: #7cbf8a;
+    --bad: #e37b68;
+  }
 }
 
 /* Text you might want to copy (notes, goals) stays selectable. */
@@ -25,13 +71,12 @@
 .rich > :first-child { margin-top: 0; }
 .rich > :last-child { margin-bottom: 0; }
 .rich p { margin: 0.5em 0; line-height: 1.6; }
+.rich .katex { font-size: 1.08em; }
 .rich ul, .rich ol { margin: 0.5em 0; padding-left: 1.4em; }
 .rich ul { list-style: disc; }
 .rich ol { list-style: decimal; }
-.rich code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; padding: 0.1em 0.3em; border-radius: 4px; background: rgb(0 0 0 / 0.06); }
-.rich pre { margin: 0.6em 0; padding: 0.75em 1em; border-radius: 8px; overflow-x: auto; background: rgb(0 0 0 / 0.06); }
+.rich code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; padding: 0.1em 0.3em; border-radius: 4px; background: var(--accent-soft); }
+.rich pre { margin: 0.6em 0; padding: 0.75em 1em; border-radius: 10px; overflow-x: auto; background: var(--paper); border: 1px solid var(--line); }
 .rich pre code { padding: 0; background: none; }
 .rich .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
-@media (prefers-color-scheme: dark) {
-  .rich code, .rich pre { background: rgb(255 255 255 / 0.08); }
-}
+

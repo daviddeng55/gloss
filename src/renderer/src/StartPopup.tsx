@@ -56,7 +56,7 @@ export default function StartPopup() {
 
   return (
     <form
-      className="flex h-screen flex-col gap-4 p-4 text-[13px] text-neutral-900 dark:text-neutral-100"
+      className="flex h-screen flex-col gap-4 p-4 text-[13px] text-ink"
       onSubmit={(e) => {
         e.preventDefault();
         void start();
@@ -65,7 +65,7 @@ export default function StartPopup() {
       <h1 className="text-[15px] font-semibold">Start a study session</h1>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-xs font-medium text-neutral-500 dark:text-neutral-400">Course</legend>
+        <legend className="mb-2 text-xs font-medium text-muted">Course</legend>
         <div className="grid grid-cols-2 gap-1.5">
           {courses.map((c) => (
             <button
@@ -77,8 +77,8 @@ export default function StartPopup() {
               }}
               className={`rounded-lg px-3 py-2 text-left font-medium transition-colors ${
                 c.id === courseId
-                  ? "bg-blue-600 text-white"
-                  : "bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/15"
+                  ? "bg-accent text-white"
+                  : "bg-accent-soft/70 hover:bg-accent-soft"
               }`}
               aria-pressed={c.id === courseId}
             >
@@ -89,7 +89,7 @@ export default function StartPopup() {
       </fieldset>
 
       <label className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">Goal (optional)</span>
+        <span className="text-xs font-medium text-muted">Goal (optional)</span>
         <input
           ref={goalRef}
           autoFocus
@@ -97,7 +97,7 @@ export default function StartPopup() {
           maxLength={200}
           onChange={(e) => setGoal(e.target.value)}
           placeholder="e.g. finish induction practice problems"
-          className="selectable rounded-lg border border-black/10 bg-white/70 px-3 py-2 outline-none placeholder:text-neutral-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-white/15 dark:bg-black/20"
+          className="selectable rounded-xl border border-line bg-card/80 px-3 py-2 outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/25"
         />
       </label>
 
@@ -127,11 +127,11 @@ export default function StartPopup() {
         <button
           type="submit"
           disabled={!selected || starting}
-          className="rounded-lg bg-blue-600 py-2 font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+          className="rounded-lg bg-accent py-2 font-semibold text-white hover:bg-accent-strong disabled:opacity-40"
         >
           {starting ? "Starting…" : selected ? `Start ${selected.name}` : "Choose a course"}
         </button>
-        <p className="text-center text-[11px] text-neutral-500 dark:text-neutral-400">
+        <p className="text-center text-[11px] text-muted">
           Never start a session during a test, quiz or exam.
         </p>
       </div>

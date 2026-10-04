@@ -462,9 +462,10 @@ async function smokeReview(dir: string) {
   }
   if (!reviewWin) openReview(id); // in case the window was closed meanwhile
   await wait(3000);
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(dir, "review-top.png"), (await reviewWin!.webContents.capturePage()).toPNG());
   await reviewWin!.webContents.executeJavaScript("document.querySelector('.overflow-y-auto').scrollTop = 1e6");
   await wait(500);
-  const { writeFileSync } = await import("node:fs");
   writeFileSync(join(dir, "review.png"), (await reviewWin!.webContents.capturePage()).toPNG());
   console.log("SMOKE score", JSON.stringify(db.getSession(id)!.quizScore));
   app.quit();
