@@ -10,6 +10,8 @@ import { StudyDb } from "../core/db.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
 import type { AppState, Course, StartResult } from "../shared/types.ts";
+import { loadSettings } from "../core/settings.ts";
+import { AskController } from "./ask.ts";
 import { ReviewService } from "./review.ts";
 
 const ROOT = app.getAppPath(); // the project folder while developing
@@ -34,6 +36,7 @@ let popup: BrowserWindow | null = null;
 let history: BrowserWindow | null = null;
 let reviewWin: BrowserWindow | null = null;
 let reviews: ReviewService;
+let asker: AskController;
 let current: Current | null = null;
 let lastMenuKey = "";
 
@@ -157,6 +160,20 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
   });
   session.done = session.loop.run();
   current = session as Current;
+  // Circle and ask (Stage 4): the shortcut only works while this session runs.
+  const askProblem = asker.startSession(
+    {
+      sessionId,
+      courseId,
+      courseName: course.name,
+      helper,
+      neverRecord: loadNeverRecord(fromRoot("never-record.json")),
+      projectName: basename(ROOT),
+      isPaused: () => current?.loop.status === "paused",
+    },
+    loadSettings(fromRoot("settings.json")),
+  );
+  if (askProblem) console.log(`[ask] ${askProblem}`);
   popup?.hide();
   broadcast();
   return { ok: true };
@@ -188,6 +205,7 @@ function endSession(): Promise<void> {
   if (!current) return Promise.resolve();
   const c = current;
   const endedAt = new Date().toISOString();
+  asker.endSession();
   c.loop.stop();
   current = null;
   broadcast();
@@ -314,6 +332,12 @@ function registerIpc() {
     reviews.ensure(String(id));
     openReview(String(id));
   });
+  ipcMain.handle("ask:info", (_e, id: unknown) => asker.info(String(id)));
+  ipcMain.handle("ask:send", (_e, id: unknown, question: unknown, level: unknown) => {
+    const lvl = level === "explain" || level === "example" ? level : "nudge";
+    void asker.ask(String(id), typeof question === "string" ? question : "", lvl);
+  });
+  ipcMain.handle("overlay:click", () => asker.overlayClicked());
   ipcMain.handle("chunks:delete", (_e, id: unknown) => db.deleteChunk(String(id)));
   ipcMain.handle("review:redo", (_e, id: unknown) => {
     db.clearReview(String(id));
@@ -325,6 +349,7 @@ function registerIpc() {
     reviews.answer(String(itemId), typeof response === "string" ? response.slice(0, 2000) : ""),
   );
   ipcMain.handle("window:close", (e) => {
+    if (asker.isOverlay(BrowserWindow.fromWebContents(e.sender))) return asker.cancel(); // Esc while circling
     const win = BrowserWindow.fromWebContents(e.sender);
     if (win === popup) win?.hide();
     else win?.close();
@@ -344,6 +369,7 @@ app.whenReady().then(() => {
   reviews = new ReviewService(db, loadCourses, (sessionId) => {
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
   });
+  asker = new AskController(loadSettings(fromRoot("settings.json")), { db, preload, load });
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
@@ -377,6 +403,13 @@ app.whenReady().then(() => {
   if (process.env.STUDY_BUDDY_SMOKE) void smokeTest(process.env.STUDY_BUDDY_SMOKE);
   if (process.env.STUDY_BUDDY_SMOKE_SESSION) void smokeSession(Number(process.env.STUDY_BUDDY_SMOKE_SESSION));
   if (process.env.STUDY_BUDDY_SMOKE_REVIEW) void smokeReview(process.env.STUDY_BUDDY_SMOKE_REVIEW);
+  if (process.env.STUDY_BUDDY_SMOKE_ASK) void smokeAsk(process.env.STUDY_BUDDY_SMOKE_ASK);
+  // Development checks: show errors from every window in the terminal.
+  if (process.env.STUDY_BUDDY_DB) {
+    app.on("web-contents-created", (_e, wc) =>
+      wc.on("console-message", (ev) => ev.level === "error" && console.log("SMOKE window error:", ev.message.slice(0, 120), "in", wc.getURL().split("#").pop())),
+    );
+  }
 });
 
 app.on("window-all-closed", () => {
@@ -469,5 +502,38 @@ async function smokeReview(dir: string) {
   await wait(500);
   writeFileSync(join(dir, "review.png"), (await reviewWin!.webContents.capturePage()).toPNG());
   console.log("SMOKE score", JSON.stringify(db.getSession(id)!.quizScore));
+  app.quit();
+}
+
+/** Development check: circle-and-ask with a pretend circle and a real model answer; saves screenshots. */
+async function smokeAsk(dir: string) {
+  const { writeFileSync } = await import("node:fs");
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const res = await startSession("cs135", "ask smoke test");
+  if (!res.ok) {
+    console.log("SMOKE start failed", res.message);
+    return app.quit();
+  }
+  const c = screen.getCursorScreenPoint();
+  const path = Array.from({ length: 40 }, (_, i) => {
+    const t = (i / 39) * Math.PI * 2;
+    return { x: Math.round(c.x + 220 * Math.cos(t)), y: Math.round(c.y + 130 * Math.sin(t)) };
+  });
+  const askId = await asker.smoke(path, dir);
+  console.log("SMOKE ask window", askId ? "opened" : "NOT opened", JSON.stringify(askId ? { ...asker.info(askId), thumbnail: asker.info(askId)!.thumbnail.length + " chars" } : null));
+  if (!askId) return app.quit();
+  writeFileSync(join(dir, "sent.jpg"), Buffer.from(asker.info(askId)!.thumbnail.split(",")[1], "base64"));
+  await wait(1500);
+  const t0 = Date.now();
+  await asker.ask(askId, "What is shown here, in one or two sentences?", "nudge");
+  console.log("SMOKE answered in", Math.round((Date.now() - t0) / 1000), "s");
+  const ps = (await (await fetch("http://localhost:11434/api/ps")).json()) as { models: { name: string }[] };
+  console.log("SMOKE models loaded:", ps.models.map((m) => m.name).join(", "));
+  await wait(800);
+  writeFileSync(join(dir, "ask.png"), (await asker.windowFor(askId)!.webContents.capturePage()).toPNG());
+  console.log("SMOKE ask text:", JSON.stringify((await asker.windowFor(askId)!.webContents.executeJavaScript("document.body.innerText")).slice(0, 600)));
+  const id = current!.sessionId;
+  await endSession();
+  console.log("SMOKE saved questions:", JSON.stringify(db.getQuestions(id).map((q) => ({ q: q.question, answers: q.answers.length }))));
   app.quit();
 }

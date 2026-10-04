@@ -67,6 +67,29 @@ export type ReviewData = {
 
 export type AnswerResult = { correct: boolean; answer: string; explanation: string };
 
+/** Stage 4: one "circle and ask" conversation about a screenshot crop. */
+export type AskInfo = {
+  askId: string;
+  courseName: string;
+  thumbnail: string; // data: URL of exactly what is sent
+  circled: boolean; // false = area around the cursor
+  sourceTitle: string;
+};
+
+/** Messages to the circling overlay: points are relative to the overlay window. */
+export type OverlayEvent =
+  | { type: "start"; shortcutLabel: string }
+  | { type: "path"; points: { x: number; y: number }[] }
+  | { type: "end" };
+
+export type HintLevelId = "nudge" | "explain" | "example";
+
+export type AskEvent =
+  | { askId: string; type: "start"; turn: number; level: HintLevelId; question: string }
+  | { askId: string; type: "text"; turn: number; text: string }
+  | { askId: string; type: "done"; turn: number }
+  | { askId: string; type: "error"; turn: number; message: string };
+
 export type AppState =
   | { status: "idle" }
   | {
@@ -99,5 +122,10 @@ export interface StudyApi {
   deletePassage(chunkId: string): Promise<void>;
   onReview(callback: (sessionId: string) => void): () => void;
   closeWindow(): Promise<void>;
+  askInfo(askId: string): Promise<AskInfo | null>;
+  ask(askId: string, question: string, level: HintLevelId): Promise<void>;
+  onAsk(callback: (e: AskEvent) => void): () => void;
+  onOverlay(callback: (e: OverlayEvent) => void): () => void;
+  overlayClick(): Promise<void>;
   onState(callback: (state: AppState) => void): () => void;
 }

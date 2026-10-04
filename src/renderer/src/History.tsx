@@ -170,6 +170,34 @@ function SessionView({ s, courseName, live, onChanged }: { s: SessionDetail; cou
         ) : null}
       </header>
 
+      {s.questions.length ? (
+        <section className="mb-6">
+          <h3 className="mb-2 text-[11px] font-bold tracking-widest text-accent uppercase">
+            Questions you asked ({s.questions.length})
+          </h3>
+          <ul className="space-y-2">
+            {s.questions.map((q) => (
+              <li key={q.id}>
+                <details className="rounded-xl border border-line bg-card px-3 py-2">
+                  <summary className="cursor-pointer font-serif text-[15px]">
+                    <span className="mr-2 text-xs text-muted tabular-nums">{timeFmt.format(new Date(q.askedAt))}</span>
+                    {q.question}
+                  </summary>
+                  <div className="mt-2 space-y-3">
+                    {q.answers.map((a, i) => (
+                      <div key={i}>
+                        <p className="text-xs font-bold text-accent">{a.level}</p>
+                        <Rich text={a.text} className="font-serif text-[15px]" />
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {s.chunks.length === 0 ? (
         <p className="text-muted">
           {live ? "Nothing saved yet — text appears here as you study." : "No text was saved in this session."}

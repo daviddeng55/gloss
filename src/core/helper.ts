@@ -124,6 +124,21 @@ export class VisionHelper {
     return this.request("image", { rect, maxWidth });
   }
 
+  /**
+   * JPEG (base64) of a screen region: the display under (x, y), cropped to `rect` — both in global
+   * points, top-left origin. Windows of `excludePids` and `excludeWindowIds` are left out. Memory only.
+   */
+  snap(args: {
+    x: number;
+    y: number;
+    rect: Box;
+    excludePids?: number[];
+    excludeWindowIds?: number[];
+    maxWidth?: number;
+  }): Promise<{ jpeg: string; width: number; height: number }> {
+    return this.request("snap", args);
+  }
+
   async forgetImage(): Promise<void> {
     await this.request("forgetImage");
   }

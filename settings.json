@@ -1,0 +1,9 @@
+{
+  "ask": {
+    "shortcut": "Alt+A",
+    "fallbackW": 900,
+    "fallbackH": 700,
+    "padding": 24,
+    "minCircle": 40
+  }
+}
