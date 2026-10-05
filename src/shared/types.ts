@@ -2,6 +2,19 @@
 
 export type Course = { id: string; name: string; math?: boolean };
 
+/** What the Settings window edits. */
+export type SettingsView = {
+  settings: {
+    capture: { intervalSeconds: number; dwellSeconds: number };
+    learn: { offerHelpWhenStuck: boolean };
+    ask: { shortcut: string; voice: boolean; locale: string; fallbackW: number; fallbackH: number; padding: number; minCircle: number };
+  };
+  courses: Course[];
+  neverRecord: { apps: string[]; titles: string[] };
+  models?: { tutor: string; math: string; memory: string };
+  aiProblem?: string;
+};
+
 export type SessionRow = {
   id: string;
   courseId: string;
@@ -161,6 +174,9 @@ export interface StudyApi {
   redoReview(sessionId: string): Promise<void>;
   deletePassage(chunkId: string): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
+  getSettings(): Promise<SettingsView>;
+  saveSettings(s: SettingsView): Promise<{ ok: boolean; message?: string }>;
+  openSettings(): Promise<void>;
   deleteCourseData(courseId: string): Promise<void>;
   onReview(callback: (sessionId: string) => void): () => void;
   closeWindow(): Promise<void>;

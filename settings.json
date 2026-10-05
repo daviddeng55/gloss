@@ -1,4 +1,8 @@
 {
+  "capture": {
+    "intervalSeconds": 5,
+    "dwellSeconds": 8
+  },
   "learn": {
     "offerHelpWhenStuck": true
   },

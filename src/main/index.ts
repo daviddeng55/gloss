@@ -10,7 +10,8 @@ import { StudyDb } from "../core/db.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
 import type { AppState, Course, StartResult } from "../shared/types.ts";
-import { loadSettings } from "../core/settings.ts";
+import { loadSettings, sanitizeSettings, type Settings } from "../core/settings.ts";
+import { writeFileSync } from "node:fs";
 import { ConfusionDetector } from "../core/confusion.ts";
 import { AskController } from "./ask.ts";
 import { LearnerService } from "./learner.ts";
@@ -42,6 +43,7 @@ let asker: AskController;
 let learner: LearnerService;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
+let settingsWin: BrowserWindow | null = null;
 let current: Current | null = null;
 let lastMenuKey = "";
 let aiProblem = ""; // shown in the menu when the local AI isn't available
@@ -109,6 +111,7 @@ function updateTray() {
     { type: "separator" },
     { label: "History…", click: showHistory },
     { label: "How You Learn…", click: openLearn },
+    { label: "Settings…", accelerator: "Command+,", click: openSettings },
     { type: "separator" },
     { label: "Quit Study Buddy", accelerator: "Command+Q", click: () => app.quit() },
   ];
@@ -171,7 +174,11 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     neverRecord: loadNeverRecord(fromRoot("never-record.json")),
     projectName: basename(ROOT),
     ownPids: [process.pid], // never capture Study Buddy's own windows
-    settings: DEFAULT_SETTINGS,
+    settings: {
+      ...DEFAULT_SETTINGS,
+      intervalMs: settings.capture.intervalSeconds * 1000,
+      dwellMs: settings.capture.dwellSeconds * 1000,
+    },
     onEntry: (entry) => session.chunker!.add(entry),
     onObserve: (o) => {
       // Noticing when you might be stuck: a quiet offer of help, never an interruption.
@@ -341,6 +348,61 @@ function openLearn() {
   app.focus({ steal: true });
 }
 
+function openSettings() {
+  if (!settingsWin) {
+    settingsWin = new BrowserWindow({
+      width: 760,
+      height: 780,
+      minWidth: 560,
+      minHeight: 480,
+      show: false,
+      title: "Study Buddy — Settings",
+      titleBarStyle: "hiddenInset",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
+      webPreferences: { preload, sandbox: true, contextIsolation: true },
+    });
+    settingsWin.on("closed", () => (settingsWin = null));
+    settingsWin.once("ready-to-show", () => settingsWin?.show());
+    load(settingsWin, "settings");
+  } else settingsWin.show();
+  app.focus({ steal: true });
+}
+
+/** Everything the Settings window edits (three files in the project folder). */
+function readAllSettings(): SettingsBundle {
+  const nr = JSON.parse(readFileSync(fromRoot("never-record.json"), "utf8")) as { apps?: string[]; titles?: string[] };
+  return { settings: loadSettings(fromRoot("settings.json")), courses: loadCourses(), neverRecord: { apps: nr.apps ?? [], titles: nr.titles ?? [] } };
+}
+
+function saveAllSettings(b: SettingsBundle): { ok: boolean; message?: string } {
+  // Courses: unique ids made from the name; at least one.
+  const courses = b.courses
+    .map((c) => ({ id: (c.id || c.name).toLowerCase().replace(/[^a-z0-9]/g, ""), name: c.name.trim().slice(0, 40), ...(c.math ? { math: true } : {}) }))
+    .filter((c) => c.id && c.name);
+  if (!courses.length) return { ok: false, message: "Add at least one course." };
+  if (new Set(courses.map((c) => c.id)).size !== courses.length) return { ok: false, message: "Two courses have the same name." };
+  // Never-record title rules are regular expressions: reject ones that don't compile.
+  for (const t of b.neverRecord.titles) {
+    try {
+      new RegExp(t, "i");
+    } catch {
+      return { ok: false, message: `This never-record rule isn't valid: ${t}` };
+    }
+  }
+  const nrPath = fromRoot("never-record.json");
+  const comment = (JSON.parse(readFileSync(nrPath, "utf8")) as { _comment?: string })._comment;
+  writeFileSync(fromRoot("settings.json"), JSON.stringify(sanitizeSettings(b.settings), null, 2) + "\n");
+  writeFileSync(fromRoot("courses.json"), JSON.stringify(courses, null, 2) + "\n");
+  writeFileSync(
+    nrPath,
+    JSON.stringify({ _comment: comment, apps: b.neverRecord.apps.map((a) => a.trim()).filter(Boolean), titles: b.neverRecord.titles.map((t) => t.trim()).filter(Boolean) }, null, 2) + "\n",
+  );
+  broadcast();
+  return { ok: true, message: current ? "Saved. Changes apply from your next session." : "Saved." };
+}
+
+type SettingsBundle = { settings: Settings; courses: Course[]; neverRecord: { apps: string[]; titles: string[] } };
+
 function openWarmup(sessionId: string) {
   warmupWin?.close();
   const area = screen.getPrimaryDisplay().workArea;
@@ -402,6 +464,9 @@ function registerIpc() {
     reviews.ensure(String(id));
     openReview(String(id));
   });
+  ipcMain.handle("settings:get", () => ({ ...readAllSettings(), models: { tutor: "qwen3.5:4b", math: "glm-ocr:q8_0", memory: "embeddinggemma" }, aiProblem }));
+  ipcMain.handle("settings:save", (_e, b: unknown) => saveAllSettings(b as SettingsBundle));
+  ipcMain.handle("settings:open", () => openSettings());
   ipcMain.handle("learn:profile", () => learner.profile());
   ipcMain.handle("learn:mark", (_e, id: unknown, known: unknown) => db.setManual(String(id), typeof known === "boolean" ? known : null));
   ipcMain.handle("learn:delete", (_e, id: unknown) => db.deleteConcept(String(id)));
@@ -512,6 +577,13 @@ app.whenReady().then(() => {
   powerMonitor.on("resume", autoResume);
 
   if (process.env.STUDY_BUDDY_SMOKE) void smokeTest(process.env.STUDY_BUDDY_SMOKE);
+  if (process.env.STUDY_BUDDY_SMOKE_SETTINGS) void (async () => {
+    openSettings();
+    await new Promise((r) => setTimeout(r, 2500));
+    const { writeFileSync: w } = await import("node:fs");
+    w(join(process.env.STUDY_BUDDY_SMOKE_SETTINGS!, "settings.png"), (await settingsWin!.webContents.capturePage()).toPNG());
+    app.quit();
+  })();
   if (process.env.STUDY_BUDDY_SMOKE_SESSION) void smokeSession(Number(process.env.STUDY_BUDDY_SMOKE_SESSION));
   if (process.env.STUDY_BUDDY_SMOKE_REVIEW) void smokeReview(process.env.STUDY_BUDDY_SMOKE_REVIEW);
   if (process.env.STUDY_BUDDY_SMOKE_ASK) void smokeAsk(process.env.STUDY_BUDDY_SMOKE_ASK);

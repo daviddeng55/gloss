@@ -102,3 +102,15 @@ test("deleting a session removes its notes, quiz, questions and learner evidence
     rmSync(dir, { recursive: true });
   }
 });
+
+test("settings are kept in sensible ranges", async () => {
+  const { sanitizeSettings, DEFAULT_SETTINGS_FILE } = await import("./settings.ts");
+  const s = sanitizeSettings({
+    ...DEFAULT_SETTINGS_FILE,
+    capture: { intervalSeconds: 0, dwellSeconds: 999 },
+    ask: { ...DEFAULT_SETTINGS_FILE.ask, fallbackW: Number.NaN, shortcut: "" },
+  });
+  assert.deepEqual(s.capture, { intervalSeconds: 2, dwellSeconds: 60 });
+  assert.equal(s.ask.fallbackW, 900);
+  assert.equal(s.ask.shortcut, "Alt+A");
+});

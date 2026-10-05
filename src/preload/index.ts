@@ -37,6 +37,9 @@ const api: StudyApi = {
   redoReview: (sessionId) => ipcRenderer.invoke("review:redo", sessionId),
   deletePassage: (chunkId) => ipcRenderer.invoke("chunks:delete", chunkId),
   deleteSession: (sessionId) => ipcRenderer.invoke("sessions:delete", sessionId),
+  getSettings: () => ipcRenderer.invoke("settings:get"),
+  saveSettings: (s) => ipcRenderer.invoke("settings:save", s),
+  openSettings: () => ipcRenderer.invoke("settings:open"),
   deleteCourseData: (courseId) => ipcRenderer.invoke("courses:delete-data", courseId),
   onReview: (callback) => {
     const listener = (_e: unknown, sessionId: string) => callback(sessionId);
