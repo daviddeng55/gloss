@@ -590,7 +590,8 @@ async function smokeReview(dir: string) {
 async function smokeAsk(dir: string) {
   const { writeFileSync } = await import("node:fs");
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const res = await startSession("cs135", "ask smoke test");
+  const course = process.env.STUDY_BUDDY_SMOKE_COURSE ?? "cs135";
+  const res = await startSession(course, "ask smoke test");
   if (!res.ok) {
     console.log("SMOKE start failed", res.message);
     return app.quit();
@@ -600,7 +601,13 @@ async function smokeAsk(dir: string) {
     const t = (i / 39) * Math.PI * 2;
     return { x: Math.round(c.x + 220 * Math.cos(t)), y: Math.round(c.y + 130 * Math.sin(t)) };
   });
-  const askId = await asker.smoke(path, dir);
+  if (learner.warmup(current!.sessionId, course)) {
+    openWarmup(current!.sessionId);
+    await wait(2500);
+    writeFileSync(join(dir, "warmup.png"), (await warmupWin!.webContents.capturePage()).toPNG());
+    warmupWin?.close();
+  }
+  const askId = await asker.smoke(path, dir, process.env.STUDY_BUDDY_SMOKE_QUESTION);
   console.log("SMOKE ask window", askId ? "opened" : "NOT opened", JSON.stringify(askId ? { ...asker.info(askId), thumbnail: asker.info(askId)!.thumbnail.length + " chars" } : null));
   if (!askId) return app.quit();
   writeFileSync(join(dir, "sent.jpg"), Buffer.from(asker.info(askId)!.thumbnail.split(",")[1], "base64"));

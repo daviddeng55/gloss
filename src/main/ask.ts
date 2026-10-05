@@ -255,7 +255,7 @@ export class AskController {
   }
 
   /** Development check: circle along `path` (global points) as if the shortcut were pressed twice. */
-  async smoke(path: Point[], dir: string): Promise<string | null> {
+  async smoke(path: Point[], dir: string, question = "how do I find the limit of this sequence"): Promise<string | null> {
     await this.begin();
     if (!this.tracking) return null;
     this.path = path;
@@ -265,7 +265,7 @@ export class AskController {
     // Pretend voice: show the listening panel as it would look mid-question.
     this.send({ type: "voice", state: "listening" });
     this.send({ type: "level", value: 0.7 });
-    this.send({ type: "speech", text: "how do I find the limit of this sequence" });
+    this.send({ type: "speech", text: question });
     await new Promise((r) => setTimeout(r, 800));
     const { writeFileSync } = await import("node:fs");
     writeFileSync(`${dir}/overlay.png`, (await this.overlay!.webContents.capturePage()).toPNG());
@@ -279,7 +279,7 @@ export class AskController {
       })()`),
     );
     const before = new Set(this.asks.keys());
-    this.smokeSpoken = "how do I find the limit of this sequence";
+    this.smokeSpoken = question;
     await this.finish();
     this.smokeSpoken = "";
     return [...this.asks.keys()].find((k) => !before.has(k)) ?? null;

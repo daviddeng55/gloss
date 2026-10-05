@@ -36,6 +36,13 @@ The microphone is on only between the two presses; speech is turned into text on
 ("Study Buddy Voice" needs Microphone and Speech Recognition permission). Change the shortcut or turn
 voice off in `settings.json`.
 
+### How you learn (adaptive learning)
+Study Buddy keeps a learner model of each course: the concepts you've studied, how well you know each
+(it fades if you don't practise), and which kind of help works for you. It uses it to pitch answers,
+aim quizzes at weak spots, warm you up with questions due for review, point out earlier topics today's
+material builds on, and offer help when you seem stuck. See and correct it under **How You Learn…**
+in the menu bar. Turn off the "stuck?" offers with `"offerHelpWhenStuck": false` in `settings.json`.
+
 ### AI (Ollama)
 The AI runs on your Mac through [Ollama](https://ollama.com) — nothing is sent online.
 Ollama must be running (it lives in the menu bar) with the model downloaded: `ollama pull qwen3.5:4b`.
