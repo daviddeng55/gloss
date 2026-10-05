@@ -47,7 +47,7 @@ Build in this order. **Do not start a stage until the previous one works.**
 | 2 | Menu bar app: start/stop a session, pick a course, save sessions |
 | 3 | End-of-session summary and quiz |
 | 4 | Hover and ask |
-| 5 | Memory across sessions: course-aware answers and warm-up review |
+| 5 | Memory and adaptive learning: course memory, learner model, adaptive teaching, noticing confusion |
 | 6 | Privacy controls and polish |
 | 7 | I use it for two weeks and keep notes |
 
@@ -125,12 +125,44 @@ Send the cropped image, the question, the course and the most relevant text from
 1. Option+A, circle, typed question, answer.
 2. Add voice.
 
-## 8. Stage 5 — Memory across sessions
+## 8. Stage 5 — Memory and adaptive learning
+> Inspired by YC's "The Primer" request: a tutor that learns how *I* learn. The loop: know what I've
+> covered → know what I've mastered and what helps me → teach to that → notice when I'm confused and
+> try a different approach → track mastery over time.
+
+### 5a. Memory across sessions
 - Create an **embedding** for each chunk with a small local embedding model, so the app can search past sessions by meaning.
-- When I ask a question, also search earlier sessions for the same course, and list **Sources** under the answer (session date and window title).
-- Apply the "only what's been covered" rule using this course memory.
-- **Warm-up:** when I start a session, offer 3 questions I got wrong before in that course.
-- **Spaced review:** a wrong answer comes back next session. A right answer comes back after 3 days, then 7, then 14.
+- When I ask a question, also search earlier sessions of the same course, and list **Sources** under the answer (session date and window title).
+- Apply the "only what's been covered" rule using this course memory, not just today's session.
+
+### 5b. Learner model (the core)
+- The app tracks **concepts**, not just sessions (e.g. "strong induction", "limit of a recursive sequence"). At the end of each session the AI names the concepts the session covered and links them to their passages; near-duplicate names are merged (by embedding).
+- For each concept it keeps:
+  - **Mastery** (0–100%): goes up with correct quiz answers and questions I resolve at a low hint level; goes down with wrong answers and needing a worked example; **fades over time** if not practised (forgetting).
+  - **Confidence**: how much evidence there is (one quiz answer ≠ five).
+  - **What helps me**: which hint level and which kind of explanation (nudge / concept / worked example) led to me getting it right afterwards.
+- The same "what helps me" is also kept **overall**, so a new concept starts from my usual style.
+- Mastery is ordinary, explainable code (not the AI's opinion), so it's consistent and I can see why it changed.
+- **"How you learn" page** (in History): concepts per course with mastery, confidence, what helps, and the evidence behind each. I can **correct it** ("I know this", "I don't") and **delete** any of it.
+
+### 5c. Adaptive teaching
+- **Answers:** when I ask about a concept I've struggled with, start at the help level that worked for me before. If I ask again about the same thing, **switch approach** (e.g. from explanation to worked example) instead of repeating it.
+- **Quizzes:** aim questions at my weakest concepts in today's material; questions get harder as I get them right and easier when I don't. Still only from material I've covered.
+- **Warm-up:** when I start a session, offer up to 3 questions on the concepts I'm most likely to have forgotten in that course (lowest faded mastery), including ones I got wrong before.
+- **Spaced review:** a wrong answer comes back next session; a right answer after 3 days, then 7, then 14 — adjusted by the concept's mastery.
+- **Connections:** when today's material builds on an earlier concept I'm weak on, say so ("this uses strong induction from Sept 28, which you missed twice") and link to it.
+
+### 5d. Noticing confusion
+- Signals during a session: coming back to the same passage several times, asking about the same concept repeatedly, or staying a long time on one part without progress.
+- When it notices, it **offers** help quietly (a small notification: "Stuck on strong induction? Option+A to ask") — it never interrupts on its own, and I can turn this off.
+
+### Privacy
+- The learner model is personal data: it stays on my Mac, I can see all of it, correct it, and delete it (per concept, per course, or all).
+
+### Build order (stop after each for testing)
+5a → 5b → 5c → 5d.
+
+**Done when:** after a week of real sessions, the "How you learn" page matches how I think I'm doing in each course, the quiz targets my weak spots, and when I ask about something I struggled with before, the first answer is pitched at the right level.
 
 ## 9. Tutor rules (use in every AI prompt)
 - Use **only** the provided course material to explain. If the question needs something that isn't there, say "This may not have been covered in your course yet," and ask if I want a general explanation anyway.
@@ -191,6 +223,18 @@ type Chunk = {
   sourceTitle: string;
   capturedAt: string;
   embedding?: number[];
+};
+
+type Concept = {
+  id: string;
+  courseId: string;
+  name: string;                // e.g. "strong induction"
+  embedding?: number[];
+  mastery: number;             // 0–1, before fading
+  lastPracticedAt?: string;    // fading is computed from this
+  evidence: { at: string; kind: "quiz" | "ask" | "review" | "manual"; correct?: boolean; hintLevel?: string; chunkId?: string }[];
+  helps: { nudge: number; explain: number; example: number }; // what led to getting it right
+  userOverride?: "known" | "unknown";
 };
 
 type QuizItem = {
