@@ -165,7 +165,7 @@ export function tooThin(passages: Passage[]): string | null {
 // ---------- summary ----------
 
 export type Summary =
-  | { ok: true; points: { text: string; passageIds: string[] }[] }
+  | { ok: true; points: { text: string; passageIds: string[]; concept?: string }[] }
   | { ok: false; reason: string };
 
 const SUMMARY_SCHEMA = {
@@ -177,8 +177,12 @@ const SUMMARY_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { text: { type: "string" }, sources: { type: "array", items: { type: "integer" } } },
-        required: ["text", "sources"],
+        properties: {
+          text: { type: "string" },
+          concept: { type: "string" },
+          sources: { type: "array", items: { type: "integer" } },
+        },
+        required: ["text", "concept", "sources"],
       },
     },
   },
@@ -190,11 +194,12 @@ export async function summarizeSession(
   course: string,
   goal: string | undefined,
   cfg: AiConfig = DEFAULT_AI,
+  knownConcepts: string[] = [],
 ): Promise<Summary> {
   const thin = tooThin(passages);
   if (thin) return { ok: false, reason: thin };
   const { text, used } = numbered(passages, 36_000);
-  const out = await chat<{ enough: boolean; reason: string; points: { text: string; sources: number[] }[] }>(cfg, {
+  const out = await chat<{ enough: boolean; reason: string; points: { text: string; concept?: string; sources: number[] }[] }>(cfg, {
     numCtx: 16_384,
     schema: SUMMARY_SCHEMA,
     messages: [
@@ -204,6 +209,7 @@ export async function summarizeSession(
         content: `Below are numbered passages of ${course} notes captured from the student's screen during one study session, in the order they were seen.${goal ? ` The student's goal was: "${goal}".` : ""}
 
 List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Keep math short and simple; plain notation like (x+y)/2 or sqrt(xy) is fine. Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads) and any passage that isn't ${course} course material (web searches, other courses, social media, unrelated sites) — leave those out entirely.
+For each point also give "concept": the main idea it's about, as a short name (2–5 words, e.g. "strong induction", "limit of a recursive sequence").${knownConcepts.length ? ` Reuse one of these names from earlier sessions when it's the same idea: ${knownConcepts.slice(0, 80).map((c) => `"${c}"`).join(", ")}.` : ""}
 If the passages are too garbled or unrelated to the course to summarize honestly, set "enough" to false, explain why in "reason", and return no points. Otherwise set "enough" to true and "reason" to "".
 
 ${text}`,
@@ -220,6 +226,7 @@ ${text}`,
       .slice(0, 8)
       .map((p) => ({
         text: p.text.trim(),
+        concept: p.concept?.trim() || undefined,
         passageIds: [...new Set((p.sources ?? []).filter((n) => n >= 1 && n <= used.length).map((n) => used[n - 1].id))],
       })),
   };
@@ -233,6 +240,7 @@ export type QuizDraft = {
   options?: string[];
   answer: string; // for multiple choice: the correct option's text
   passageId: string;
+  conceptId?: string;
 };
 
 export type Quiz = { ok: true; questions: QuizDraft[] } | { ok: false; reason: string };
@@ -253,9 +261,12 @@ const QUIZ_SCHEMA = {
           correct_option: { type: "integer" },
           answer: { type: "string" },
           source: { type: "integer" },
+          concept: { type: "integer" },
         },
-        required: ["type", "question", "answer", "source"],
+        required: ["type", "question", "answer", "source", "concept"],
       },
+      minItems: 6,
+      maxItems: 8,
     },
   },
   required: ["enough", "reason", "questions"],
@@ -268,6 +279,7 @@ type RawQuestion = {
   correct_option?: number;
   answer: string;
   source: number;
+  concept?: number;
 };
 
 /** LaTeX written without $...$ won't display as math, so wrap it. Exported for tests. */
@@ -308,7 +320,12 @@ export async function makeQuiz(
   passages: Passage[],
   course: string,
   cfg: AiConfig = DEFAULT_AI,
-  opts: { think?: boolean; askedQuestions?: string[] } = {},
+  opts: {
+    think?: boolean;
+    askedQuestions?: string[];
+    /** This session's concepts with your current mastery (0–1), to aim at weak spots and pitch difficulty. */
+    concepts?: { id: string; name: string; mastery: number }[];
+  } = {},
 ): Promise<Quiz> {
   const thin = tooThin(passages);
   if (thin) return { ok: false, reason: thin };
@@ -327,11 +344,12 @@ export async function makeQuiz(
 
 Write a quiz of 8 questions (at least 3 "multiple_choice" and at least 3 "short_answer") that checks understanding of this material.
 - Every question must be answerable from ONE passage alone; put its number in "source".
+- Every question must make sense on its own: never refer to "Example 48", "Theorem 46", "the table", "the notes" or "the passage" — state the formula, sequence or claim you're asking about in the question itself.
 - Test ideas that matter (definitions, why a step works, what a result says), not trivia like page numbers or window titles.
 - multiple_choice: 4 "options", exactly one correct; "correct_option" is its index starting at 0; "answer" is the correct option's text. Wrong options should be plausible.
 - short_answer: a question with a short answer (a few words or one sentence); "answer" is the model answer taken from the passage.
 - Write math in LaTeX between $...$.
-${opts.askedQuestions?.length ? `- During the session the student asked about: ${opts.askedQuestions.map((q) => `"${q.slice(0, 200)}"`).join("; ")}. Include at least 2 questions on those topics if the passages cover them.\n` : ""}- Ignore stray interface text, anything that looks garbled, and any passage that isn't ${course} course material (web searches, other courses, unrelated sites). Never ask about those.
+${opts.concepts?.length ? `- Concepts in this session, with how well the student knows each (0–100%):\n${opts.concepts.map((c, i) => `  C${i + 1}. ${c.name}: ${Math.round(c.mastery * 100)}%`).join("\n")}\n  Put most questions on the weakest concepts. Pitch difficulty to mastery: below 40% ask about the basic idea or definition; 40–70% ask how or why a step works; above 70% ask something that needs applying it. Give each question's concept number in "concept" (e.g. 2 for C2).\n` : `- Set "concept" to 0.\n`}${opts.askedQuestions?.length ? `- During the session the student asked about: ${opts.askedQuestions.map((q) => `"${q.slice(0, 200)}"`).join("; ")}. Include at least 2 questions on those topics if the passages cover them.\n` : ""}- Ignore stray interface text, anything that looks garbled, and any passage that isn't ${course} course material (web searches, other courses, unrelated sites). Never ask about those.
 If the passages don't contain enough clear course material for good questions, set "enough" to false, explain in "reason", and return no questions. Otherwise "enough" is true and "reason" is "".
 
 ${text}`,
@@ -340,6 +358,13 @@ ${text}`,
   });
   if (!out.enough) return { ok: false, reason: out.reason || "The captured text wasn't clear enough to make good questions." };
   const questions = validateQuestions(out.questions, used);
+  // Attach each question's concept (by the number the model gave).
+  const raw = out.questions ?? [];
+  for (const q of questions) {
+    const r = raw.find((x) => x.question?.trim() && ensureMathDelimiters(x.question.trim()) === q.question);
+    const c = r?.concept;
+    if (opts.concepts && typeof c === "number" && c >= 1 && c <= opts.concepts.length) q.conceptId = opts.concepts[c - 1].id;
+  }
   if (questions.length < 3) {
     return { ok: false, reason: "The AI couldn't make enough good questions from this session's text." };
   }
@@ -373,11 +398,17 @@ export async function verifyQuestions(
   passages: Passage[],
   cfg: AiConfig = DEFAULT_AI,
 ): Promise<{ kept: QuizDraft[]; dropped: { question: string; problem: string }[] }> {
-  const byId = new Map(passages.map((p) => [p.id, p]));
+  // The cited passage plus its neighbours: a page often continues across two passages.
+  const index = new Map(passages.map((p, i) => [p.id, i]));
+  const context = (id: string) => {
+    const i = index.get(id);
+    if (i === undefined) return "";
+    return passages.slice(Math.max(0, i - 1), i + 2).map((p) => p.text).join("\n\n");
+  };
   const list = questions
     .map((q, i) => {
       const opts = q.options ? `\nOptions: ${q.options.map((o, j) => `(${j + 1}) ${o}`).join("  ")}` : "";
-      return `### Question ${i + 1}\nPassage:\n${byId.get(q.passageId)?.text ?? ""}\n\nQuestion: ${q.question}${opts}\nGiven answer: ${q.answer}`;
+      return `### Question ${i + 1}\nPassage:\n${context(q.passageId)}\n\nQuestion: ${q.question}${opts}\nGiven answer: ${q.answer}`;
     })
     .join("\n\n");
   const out = await chat<{ results: { number: number; keep: boolean; problem: string }[] }>(cfg, {
@@ -389,7 +420,7 @@ export async function verifyQuestions(
       {
         role: "user",
         content: `You are checking quiz questions written from course notes. For each question, set "keep" to true ONLY if all of these hold:
-1. The question makes sense and is clearly worded.
+1. The question makes sense on its own and is clearly worded (it doesn't depend on seeing "Example N" or a table).
 2. The passage alone contains what's needed to answer it.
 3. The given answer is correct according to the passage (check any math carefully).
 4. For multiple choice, exactly one option is correct.
@@ -698,15 +729,17 @@ export function askAboutImage(
     question: string;
     course: string;
     level: HintLevel;
-    passages: Passage[];
+    passages: (Passage & { when?: string })[];
     earlier: { question: string; level: HintLevel; answer: string }[];
+    /** What the learner model knows: the concept, how well it's known, related weak spots. */
+    learner?: string;
   },
   onText: (text: string) => void,
   cfg: AiConfig = DEFAULT_AI,
 ): Promise<string> {
   return withModel(cfg, async () => {
     const material = req.passages.length
-      ? req.passages.map((p, i) => `[${i + 1}] (from: ${p.sourceTitle || "unknown window"})\n${p.text}`).join("\n\n")
+      ? req.passages.map((p, i) => `[${i + 1}] (${p.when ? `${p.when}, ` : ""}from: ${p.sourceTitle || "unknown window"})\n${p.text}`).join("\n\n")
       : "(Nothing from this session's notes matches this question.)";
     const messages: Message[] = [
       { role: "system", content: TUTOR_RULES },
@@ -715,8 +748,9 @@ export function askAboutImage(
         images: [req.imageBase64],
         content: `Course: ${req.course}. The image shows the part of the screen the student circled.
 
-Course material from this study session:
+Course material (from this session and earlier ones):
 ${material}
+${req.learner ? `\nAbout this student: ${req.learner}\n` : ""}
 
 ${req.earlier.length ? `Earlier in this conversation:\n${req.earlier.map((e) => `Q: ${e.question}\nYou (${HINT_LEVELS[e.level].label}): ${e.answer}`).join("\n\n")}\n\n` : ""}Student's question: ${req.question}
 
@@ -765,6 +799,45 @@ If the image looks like a graded assignment or quiz question, never give its fin
   });
 }
 
-export async function embed(): Promise<never> {
-  throw new AiError("failed", "Embeddings arrive in Stage 5.");
+// ---------- embeddings (course memory) ----------
+
+/**
+ * An embedding turns text into a list of numbers so that passages about the same idea end up close
+ * together, even when they use different words. Used for searching your past sessions by meaning.
+ */
+export const EMBEDDER: AiConfig = { baseUrl: DEFAULT_AI.baseUrl, model: "embeddinggemma" };
+
+/** Is the embedding model downloaded? (Without it, search falls back to matching words.) */
+export async function embeddingsAvailable(cfg: AiConfig = EMBEDDER): Promise<boolean> {
+  try {
+    const tags = (await (await fetch(`${cfg.baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) })).json()) as { models?: { name: string }[] };
+    return !!tags.models?.some((m) => m.name === cfg.model || m.name === `${cfg.model}:latest`);
+  } catch {
+    return false;
+  }
+}
+
+export function embed(texts: string[], cfg: AiConfig = EMBEDDER): Promise<number[][]> {
+  return withModel(cfg, async () => {
+    const res = await fetch(`${cfg.baseUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({ model: cfg.model, input: texts.map((t) => t.slice(0, 4000)), keep_alive: KEEP_ALIVE }),
+    }).catch(() => {
+      throw new AiError("not-running", "Ollama isn't running.");
+    });
+    if (!res.ok) throw new AiError(res.status === 404 ? "model-missing" : "failed", `Embedding error ${res.status}`);
+    return ((await res.json()) as { embeddings: number[][] }).embeddings;
+  });
+}
+
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(na * nb) || 1);
 }

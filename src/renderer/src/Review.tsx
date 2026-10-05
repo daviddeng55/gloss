@@ -36,6 +36,28 @@ export default function Review({ sessionId }: { sessionId: string }) {
             <SummaryView data={data} onRetry={() => void window.api.retryReview(sessionId)} />
           </section>
 
+          {data.connections.length ? (
+            <section className="mb-10">
+              <h2 className="mb-3 text-xs font-bold tracking-widest text-accent uppercase">Builds on</h2>
+              <div className="rounded-2xl border border-line bg-card p-4 shadow-sm">
+                <p className="mb-2 text-muted">Today's material uses ideas you've found hard before:</p>
+                <ul className="space-y-1.5">
+                  {data.connections.map((c) => (
+                    <li key={c.conceptId} className="flex items-baseline justify-between gap-3">
+                      <span className="font-serif text-[16px]">{c.name}</span>
+                      <span className="text-sm text-muted tabular-nums">
+                        {Math.round(c.current * 100)}% · last studied {dateFmt.format(new Date(c.lastStudied))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <button onClick={() => void window.api.openLearn()} className="mt-3 text-sm text-accent hover:underline">
+                  See how you learn →
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           <section>
             <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">Quiz</h2>
             <QuizView data={data} onRetry={() => void window.api.retryReview(sessionId)} reload={load} />
@@ -68,9 +90,11 @@ function Problem({ message, onRetry }: { message: string; onRetry?: () => void }
   );
 }
 
+type Passages = ReviewData["passages"];
+
 /** A passage's text, shown when you click a source link. */
-function Source({ data, chunkId }: { data: ReviewData; chunkId: string }) {
-  const p = data.passages[chunkId];
+export function Source({ passages, chunkId }: { passages: Passages; chunkId: string }) {
+  const p = passages[chunkId];
   if (!p) return <p className="text-sm text-muted">That passage was deleted.</p>;
   return (
     <div className="mt-2 rounded-xl border border-line bg-paper px-3 py-2 text-[14px]">
@@ -112,7 +136,7 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
                 })}
               </div>
             ) : null}
-            {open?.startsWith(`${i}:`) ? <Source data={data} chunkId={open.slice(open.indexOf(":") + 1)} /> : null}
+            {open?.startsWith(`${i}:`) ? <Source passages={data.passages} chunkId={open.slice(open.indexOf(":") + 1)} /> : null}
           </div>
         </li>
       ))}
@@ -140,7 +164,7 @@ function QuizView({ data, onRetry, reload }: { data: ReviewData; onRetry: () => 
   return (
     <Question
       key={items[current].id}
-      data={data}
+      passages={data.passages}
       item={items[current]}
       number={current + 1}
       total={items.length}
@@ -150,15 +174,15 @@ function QuizView({ data, onRetry, reload }: { data: ReviewData; onRetry: () => 
   );
 }
 
-function Question(props: {
-  data: ReviewData;
+export function Question(props: {
+  passages: Passages;
   item: QuizItemView;
   number: number;
   total: number;
   onAnswered: () => void;
   onNext: () => void;
 }) {
-  const { data, item, number, total } = props;
+  const { passages, item, number, total } = props;
   const [response, setResponse] = useState(item.answered?.response ?? "");
   const [result, setResult] = useState<AnswerResult | null>(item.answered ?? null);
   const [checking, setChecking] = useState(false);
@@ -277,7 +301,7 @@ function Question(props: {
           </button>
         ) : null}
       </div>
-      {showSource && item.chunkId ? <Source data={data} chunkId={item.chunkId} /> : null}
+      {showSource && item.chunkId ? <Source passages={passages} chunkId={item.chunkId} /> : null}
     </div>
   );
 }

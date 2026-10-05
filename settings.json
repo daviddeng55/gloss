@@ -1,4 +1,7 @@
 {
+  "learn": {
+    "offerHelpWhenStuck": true
+  },
   "ask": {
     "shortcut": "Alt+A",
     "voice": true,

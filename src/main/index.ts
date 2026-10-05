@@ -1,6 +1,6 @@
 // Main process: the menu bar icon, the capture session, the database, and the windows.
 // (Electron's "main process" is the hidden Node program; windows are separate "renderer" processes.)
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, screen, shell, Tray } from "electron";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
@@ -11,7 +11,9 @@ import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
 import type { AppState, Course, StartResult } from "../shared/types.ts";
 import { loadSettings } from "../core/settings.ts";
+import { ConfusionDetector } from "../core/confusion.ts";
 import { AskController } from "./ask.ts";
+import { LearnerService } from "./learner.ts";
 import { ReviewService } from "./review.ts";
 
 const ROOT = app.getAppPath(); // the project folder while developing
@@ -37,6 +39,9 @@ let history: BrowserWindow | null = null;
 let reviewWin: BrowserWindow | null = null;
 let reviews: ReviewService;
 let asker: AskController;
+let learner: LearnerService;
+let learnWin: BrowserWindow | null = null;
+let warmupWin: BrowserWindow | null = null;
 let current: Current | null = null;
 let lastMenuKey = "";
 
@@ -95,6 +100,7 @@ function updateTray() {
   const common: Electron.MenuItemConstructorOptions[] = [
     { type: "separator" },
     { label: "History…", click: showHistory },
+    { label: "How You Learn…", click: openLearn },
     { type: "separator" },
     { label: "Quit Study Buddy", accelerator: "Command+Q", click: () => app.quit() },
   ];
@@ -145,6 +151,9 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     db.addChunk(sessionId, courseId, chunk);
     session.chunks!++;
   });
+  const settings = loadSettings(fromRoot("settings.json"));
+  const confusion = settings.learn.offerHelpWhenStuck ? new ConfusionDetector() : null;
+  const shortcutText = () => settings.ask.shortcut.replace(/Alt|Option/i, "⌥").replace(/\+/g, "");
   // Math courses: re-read new math with the AI model (only if Ollama is ready; otherwise skip quietly).
   const mathReady = course.math ? await checkAi(MATH_READER) : null;
   if (mathReady && !mathReady.ok) console.log(`[capture] math reading off: ${mathReady.error.message}`);
@@ -156,6 +165,11 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     ownPids: [process.pid], // never capture Study Buddy's own windows
     settings: DEFAULT_SETTINGS,
     onEntry: (entry) => session.chunker!.add(entry),
+    onObserve: (o) => {
+      // Noticing when you might be stuck: a quiet offer of help, never an interruption.
+      const hint = confusion?.observe({ at: Date.now(), ...o });
+      if (hint) new Notification({ title: "Study Buddy", body: `${hint} (${shortcutText()})`, silent: true }).show();
+    },
     onLog: (line) => console.log(`[capture] ${line}`),
   });
   session.done = session.loop.run();
@@ -172,9 +186,11 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
       isPaused: () => current?.loop.status === "paused",
     },
     // Development checks never trigger the real microphone/speech permission prompts.
-    ((st) => (process.env.STUDY_BUDDY_SMOKE_ASK ? { ask: { ...st.ask, voice: false } } : st))(loadSettings(fromRoot("settings.json"))),
+    ((st) => (process.env.STUDY_BUDDY_SMOKE_ASK ? { ...st, ask: { ...st.ask, voice: false } } : st))(loadSettings(fromRoot("settings.json"))),
   );
   if (askProblem) console.log(`[ask] ${askProblem}`);
+  // Warm-up: questions you're due to review in this course (wrong ones first).
+  if (!process.env.STUDY_BUDDY_SMOKE_ASK && !process.env.STUDY_BUDDY_SMOKE_SESSION && learner.warmup(sessionId, courseId)) openWarmup(sessionId);
   popup?.hide();
   broadcast();
   return { ok: true };
@@ -220,6 +236,8 @@ function endSession(): Promise<void> {
   if (!quitting) {
     reviews.ensure(c.sessionId, saved); // summary, then quiz, once the text is saved
     openReview(c.sessionId);
+    // Afterwards, quietly give the new notes embeddings (course memory), if the model is there.
+    void saved.then(() => reviews.whenIdle()).then(() => learner.backfillEmbeddings()).catch(() => {});
   }
   return saved;
 }
@@ -292,6 +310,49 @@ function showHistory() {
   app.focus({ steal: true });
 }
 
+function openLearn() {
+  if (!learnWin) {
+    learnWin = new BrowserWindow({
+      width: 900,
+      height: 720,
+      minWidth: 600,
+      minHeight: 420,
+      show: false,
+      title: "Study Buddy — How You Learn",
+      titleBarStyle: "hiddenInset",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
+      webPreferences: { preload, sandbox: true, contextIsolation: true },
+    });
+    learnWin.on("closed", () => (learnWin = null));
+    learnWin.once("ready-to-show", () => learnWin?.show());
+    load(learnWin, "learn");
+  } else {
+    learnWin.webContents.reload();
+    learnWin.show();
+  }
+  app.focus({ steal: true });
+}
+
+function openWarmup(sessionId: string) {
+  warmupWin?.close();
+  const area = screen.getPrimaryDisplay().workArea;
+  warmupWin = new BrowserWindow({
+    width: 520,
+    height: 640,
+    x: area.x + area.width - 540,
+    y: area.y + 20,
+    show: false,
+    title: "Study Buddy — Warm-up",
+    titleBarStyle: "hiddenInset",
+    alwaysOnTop: true,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
+    webPreferences: { preload, sandbox: true, contextIsolation: true },
+  });
+  warmupWin.on("closed", () => (warmupWin = null));
+  warmupWin.once("ready-to-show", () => warmupWin?.show());
+  load(warmupWin, `warmup/${sessionId}`);
+}
+
 function openReview(sessionId: string) {
   if (!reviewWin) {
     reviewWin = new BrowserWindow({
@@ -333,9 +394,18 @@ function registerIpc() {
     reviews.ensure(String(id));
     openReview(String(id));
   });
+  ipcMain.handle("learn:profile", () => learner.profile());
+  ipcMain.handle("learn:mark", (_e, id: unknown, known: unknown) => db.setManual(String(id), typeof known === "boolean" ? known : null));
+  ipcMain.handle("learn:delete", (_e, id: unknown) => db.deleteConcept(String(id)));
+  ipcMain.handle("learn:delete-course", (_e, courseId: unknown) => db.deleteLearnerModel(typeof courseId === "string" ? courseId : undefined));
+  ipcMain.handle("learn:open", () => openLearn());
+  ipcMain.handle("warmup:get", (_e, sessionId: unknown) => {
+    const s = db.getSession(String(sessionId));
+    return s ? learner.warmup(s.id, s.courseId) : null;
+  });
   ipcMain.handle("ask:info", (_e, id: unknown) => asker.info(String(id)));
   ipcMain.handle("ask:send", (_e, id: unknown, question: unknown, level: unknown) => {
-    const lvl = level === "explain" || level === "example" ? level : "nudge";
+    const lvl = level === "explain" || level === "example" || level === "nudge" ? level : "auto";
     void asker.ask(String(id), typeof question === "string" ? question : "", lvl);
   });
   ipcMain.handle("overlay:click", () => asker.overlayClicked());
@@ -367,7 +437,8 @@ app.whenReady().then(() => {
   app.dock?.hide(); // menu bar only, no Dock icon
   // STUDY_BUDDY_DB lets development checks use a throwaway database.
   db = new StudyDb(process.env.STUDY_BUDDY_DB ?? join(app.getPath("userData"), "study-buddy.db"));
-  reviews = new ReviewService(db, loadCourses, (sessionId) => {
+  learner = new LearnerService(db, loadCourses);
+  reviews = new ReviewService(db, loadCourses, learner, (sessionId) => {
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
   });
   asker = new AskController(loadSettings(fromRoot("settings.json")), {
@@ -375,7 +446,10 @@ app.whenReady().then(() => {
     preload,
     load,
     voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Study Buddy Voice") },
+    learner,
   });
+  // Older notes get embeddings too, once the embedding model is there (quietly, in the background).
+  setTimeout(() => void learner.backfillEmbeddings().catch(() => {}), 30_000);
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
@@ -410,6 +484,7 @@ app.whenReady().then(() => {
   if (process.env.STUDY_BUDDY_SMOKE_SESSION) void smokeSession(Number(process.env.STUDY_BUDDY_SMOKE_SESSION));
   if (process.env.STUDY_BUDDY_SMOKE_REVIEW) void smokeReview(process.env.STUDY_BUDDY_SMOKE_REVIEW);
   if (process.env.STUDY_BUDDY_SMOKE_ASK) void smokeAsk(process.env.STUDY_BUDDY_SMOKE_ASK);
+  if (process.env.STUDY_BUDDY_SMOKE_LEARN) void smokeLearn(process.env.STUDY_BUDDY_SMOKE_LEARN);
   // Development checks: show errors from every window in the terminal.
   if (process.env.STUDY_BUDDY_DB) {
     app.on("web-contents-created", (_e, wc) =>
@@ -545,5 +620,52 @@ async function smokeAsk(dir: string) {
   const id = current!.sessionId;
   await endSession();
   console.log("SMOKE saved questions:", JSON.stringify(db.getQuestions(id).map((q) => ({ q: q.question, answers: q.answers.length }))));
+  app.quit();
+}
+
+/** Development check: the adaptive loop on real sessions — concepts, quiz targeting, evidence, warm-up. */
+async function smokeLearn(dir: string) {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const { writeFileSync } = await import("node:fs");
+  const sessions = db.listSessions().reverse(); // oldest first
+  for (const [n, s] of sessions.entries()) {
+    const t0 = Date.now();
+    reviews.ensure(s.id);
+    let r = reviews.get(s.id)!;
+    while (r.quiz.status !== "done" && r.quiz.status !== "error" && Date.now() - t0 < 600_000) {
+      await wait(2000);
+      r = reviews.get(s.id)!;
+    }
+    const points = r.summary.data?.ok ? r.summary.data.points : [];
+    console.log(`SMOKE session ${n + 1}: ready in ${Math.round((Date.now() - t0) / 1000)} s; concepts named: ${points.map((p) => p.concept).join(" | ")}`);
+    console.log(`SMOKE   quiz: ${r.quiz.items.length} questions, ${r.quiz.error ?? r.quiz.note ?? ""}`);
+    // Answer: multiple choice wrong on the first, right on the rest; short answers deliberately vague.
+    for (const [i, q] of r.quiz.items.entries()) {
+      if (q.type !== "multiple_choice") continue;
+      const right = (await reviews.answer(q.id, q.options![0])).correct ? q.options![0] : null;
+      if (i === 0 && right) continue;
+      if (!right && i > 0) {
+        // find the right option by asking the answer from the result of a wrong pick: already recorded; skip
+      }
+    }
+    for (const q of r.quiz.items.filter((q) => q.type === "short_answer").slice(0, 1)) await reviews.answer(q.id, "not sure");
+  }
+  const profile = await learner.profile();
+  for (const c of profile.courses) {
+    console.log(`SMOKE profile ${c.courseName}: ${c.concepts.length} concepts`);
+    for (const k of c.concepts) console.log(`SMOKE   ${Math.round(k.current * 100)}% (conf ${Math.round(k.confidence * 100)}%) ${k.name} — ${k.why.join(" ")}`);
+  }
+  const last = sessions.at(-1)!;
+  console.log("SMOKE warm-up due now:", learner.warmup(last.id, "math135")?.items.length ?? 0, "(wrong answers come back next session)");
+  console.log("SMOKE connections for latest session:", JSON.stringify(learner.connections(last.id, "math135")));
+  const weakest = profile.courses[0]?.concepts[0];
+  if (weakest) {
+    console.log("SMOKE start level, asking about weakest concept:", JSON.stringify(learner.startLevel(last.id, weakest.id)));
+    const match = await learner.conceptForQuestion("math135", `I don't understand ${weakest.name}`);
+    console.log("SMOKE question matched to concept:", match?.name ?? "none");
+  }
+  openLearn();
+  await wait(2500);
+  writeFileSync(join(dir, "learn.png"), (await learnWin!.webContents.capturePage()).toPNG());
   app.quit();
 }

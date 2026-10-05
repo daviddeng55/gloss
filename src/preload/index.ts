@@ -24,6 +24,12 @@ const api: StudyApi = {
     return () => ipcRenderer.removeListener("overlay:event", listener);
   },
   overlayClick: () => ipcRenderer.invoke("overlay:click"),
+  getLearnProfile: () => ipcRenderer.invoke("learn:profile"),
+  markConcept: (id, known) => ipcRenderer.invoke("learn:mark", id, known),
+  deleteConcept: (id) => ipcRenderer.invoke("learn:delete", id),
+  deleteLearnerModel: (courseId) => ipcRenderer.invoke("learn:delete-course", courseId),
+  openLearn: () => ipcRenderer.invoke("learn:open"),
+  getWarmup: (sessionId) => ipcRenderer.invoke("warmup:get", sessionId),
   getReview: (sessionId) => ipcRenderer.invoke("review:get", sessionId),
   retryReview: (sessionId) => ipcRenderer.invoke("review:retry", sessionId),
   answerQuestion: (itemId, response) => ipcRenderer.invoke("quiz:answer", itemId, response),

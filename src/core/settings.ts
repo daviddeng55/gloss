@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { DEFAULT_CROP, type CropOptions } from "./crop.ts";
 
 export type Settings = {
+  /** Offer help when it looks like you're stuck (never interrupts on its own). */
+  learn: { offerHelpWhenStuck: boolean };
   ask: CropOptions & {
     /** Press to start circling, press again (or click) to send. Electron accelerator syntax; "Alt" = Option. */
     shortcut: string;
@@ -11,13 +13,19 @@ export type Settings = {
   };
 };
 
-export const DEFAULT_SETTINGS_FILE: Settings = { ask: { shortcut: "Alt+A", voice: true, locale: "en-US", ...DEFAULT_CROP } };
+export const DEFAULT_SETTINGS_FILE: Settings = {
+  learn: { offerHelpWhenStuck: true },
+  ask: { shortcut: "Alt+A", voice: true, locale: "en-US", ...DEFAULT_CROP },
+};
 
 export function loadSettings(path: string): Settings {
   if (!existsSync(path)) return DEFAULT_SETTINGS_FILE;
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<Settings>;
-    return { ask: { ...DEFAULT_SETTINGS_FILE.ask, ...(raw.ask ?? {}) } };
+    return {
+      learn: { ...DEFAULT_SETTINGS_FILE.learn, ...(raw.learn ?? {}) },
+      ask: { ...DEFAULT_SETTINGS_FILE.ask, ...(raw.ask ?? {}) },
+    };
   } catch {
     return DEFAULT_SETTINGS_FILE;
   }

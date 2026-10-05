@@ -2,6 +2,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import Ask from "./Ask.tsx";
 import History from "./History.tsx";
+import Learn from "./Learn.tsx";
+import Warmup from "./Warmup.tsx";
 import Overlay from "./Overlay.tsx";
 import Review from "./Review.tsx";
 import StartPopup from "./StartPopup.tsx";
@@ -19,6 +21,10 @@ createRoot(document.getElementById("root")!).render(
       <Overlay />
     ) : route === "ask" && param ? (
       <Ask askId={param} />
+    ) : route === "learn" ? (
+      <Learn />
+    ) : route === "warmup" && param ? (
+      <Warmup sessionId={param} />
     ) : route === "review" && param ? (
       <Review sessionId={param} />
     ) : (

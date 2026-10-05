@@ -1,8 +1,10 @@
 // End-of-session review: generates the summary and quiz in the background (one session at a time,
 // so the laptop only runs one AI job at once), saves them, and marks answers.
-import { AiError, checkAi, checkAnswer, makeQuiz, summarizeSession, verifyQuestions } from "../core/ai.ts";
+import { AiError, checkAi, checkAnswer, makeQuiz, summarizeSession, verifyQuestions, type QuizDraft } from "../core/ai.ts";
 import type { StudyDb } from "../core/db.ts";
+import { reviewIntervalDays } from "../core/learner.ts";
 import type { AnswerResult, Course, ReviewData, TaskStatus } from "../shared/types.ts";
+import type { LearnerService } from "./learner.ts";
 
 type Progress = { summary: TaskStatus; summaryError?: string; quiz: TaskStatus; quizError?: string };
 
@@ -16,8 +18,10 @@ export class ReviewService {
   private db: StudyDb;
   private courses: () => Course[];
   private changed: (sessionId: string) => void;
+  private learner: LearnerService;
 
-  constructor(db: StudyDb, courses: () => Course[], changed: (sessionId: string) => void) {
+  constructor(db: StudyDb, courses: () => Course[], learner: LearnerService, changed: (sessionId: string) => void) {
+    this.learner = learner;
     this.db = db;
     this.courses = courses;
     this.changed = changed;
@@ -59,6 +63,11 @@ export class ReviewService {
     this.queue = this.queue.then(() => this.generate(sessionId)).catch(() => {});
   }
 
+  /** Resolves when no summary or quiz is being made (so background work doesn't compete with it). */
+  whenIdle(): Promise<void> {
+    return this.queue;
+  }
+
   /** "Try again" after an error. */
   retry(sessionId: string) {
     const p = this.status(sessionId);
@@ -94,7 +103,10 @@ export class ReviewService {
     if (this.status(sessionId).summary === "waiting") {
       this.set(sessionId, { summary: "working" });
       try {
-        this.db.saveSummary(sessionId, await summarizeSession(passages, course, session.goal));
+        // Reuse concept names from earlier sessions so the learner model adds up over time.
+        const summary = await summarizeSession(passages, course, session.goal, undefined, this.learner.knownConceptNames(session.courseId));
+        this.db.saveSummary(sessionId, summary);
+        this.learner.recordSessionConcepts(sessionId, session.courseId, summary);
         this.set(sessionId, { summary: "done" });
       } catch (err) {
         this.set(sessionId, { summary: "error", summaryError: errorText(err) });
@@ -106,18 +118,28 @@ export class ReviewService {
       try {
         // Topics the student asked about are more likely to be quizzed.
         const askedQuestions = this.db.getQuestions(sessionId).map((q) => q.question);
-        const quiz = await makeQuiz(passages, course, undefined, { askedQuestions });
-        if (!quiz.ok) {
-          this.db.saveQuizNote(sessionId, quiz.reason);
-        } else {
-          // Drop any question the model can't back up from its passage.
-          const { kept, dropped } = await verifyQuestions(quiz.questions, passages);
-          console.log(`[review] quiz: ${quiz.questions.length} written, ${dropped.length} dropped by checking`);
-          if (kept.length < 3) {
-            this.db.saveQuizNote(sessionId, "The AI couldn't write enough questions that it could check against your notes.");
-          } else {
-            this.db.saveQuiz(sessionId, session.courseId, kept);
+        // Aim at your weakest concepts in this session, pitched to how well you know each.
+        const concepts = this.learner.quizConcepts(sessionId);
+        // Write, then check: drop any question the model can't back up from your notes. If too few
+        // survive, try once more and keep the good ones from both rounds.
+        const kept: QuizDraft[] = [];
+        let reason = "";
+        for (let attempt = 0; attempt < 2 && kept.length < 5; attempt++) {
+          const quiz = await makeQuiz(passages, course, undefined, { askedQuestions, concepts });
+          if (!quiz.ok) {
+            reason = quiz.reason;
+            break;
           }
+          const fresh = quiz.questions.filter((q) => !kept.some((k) => k.question === q.question));
+          const checked = await verifyQuestions(fresh, passages);
+          kept.push(...checked.kept);
+          console.log(`[review] quiz round ${attempt + 1}: ${fresh.length} written, ${checked.dropped.length} dropped by checking`);
+        }
+        this.learner.tagQuestions(sessionId, kept);
+        if (kept.length < 3) {
+          this.db.saveQuizNote(sessionId, reason || "The AI couldn't write enough questions that it could check against your notes.");
+        } else {
+          this.db.saveQuiz(sessionId, session.courseId, kept.slice(0, 8));
         }
         this.set(sessionId, { quiz: "done" });
       } catch (err) {
@@ -144,6 +166,7 @@ export class ReviewService {
         note: this.db.getQuizNote(sessionId) ?? undefined,
         error: p.quizError,
       },
+      connections: this.learner.connections(sessionId, s.courseId),
       passages: Object.fromEntries(
         s.chunks.map((c) => [c.id, { text: c.text, sourceTitle: c.sourceTitle, capturedAt: c.capturedAt }]),
       ),
@@ -162,7 +185,14 @@ export class ReviewService {
       const m = await checkAnswer(item, passage, response);
       result = { correct: m.correct, answer: item.answer, explanation: m.explanation };
     }
-    this.db.recordAnswer(itemId, { ...result, response, at: new Date().toISOString() });
+    // The answer is evidence for the learner model, and sets when the question comes back.
+    const meta = this.db.quizItemConcept(itemId);
+    let intervalDays: number | undefined;
+    if (meta?.conceptId) {
+      this.learner.recordQuizAnswer(meta.conceptId, result.correct, meta.sessionId, itemId);
+      intervalDays = reviewIntervalDays(result.correct, meta.intervalDays, this.learner.conceptState(meta.conceptId)?.current);
+    }
+    this.db.recordAnswer(itemId, { ...result, response, at: new Date().toISOString(), intervalDays });
     this.changed(item.sessionId);
     return result;
   }

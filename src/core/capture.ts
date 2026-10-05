@@ -105,6 +105,8 @@ export class CaptureLoop {
     onEntry: (entry: TranscriptEntry) => void;
     onLog?: (line: string) => void;
     mathPass?: MathPass; // only for math courses
+    /** Called after each check of the window you're working in (for noticing when you're stuck). */
+    onObserve?: (o: { page: string; title: string; changed: boolean }) => void;
   };
 
   constructor(opts: CaptureLoop["opts"]) {
@@ -251,6 +253,7 @@ export class CaptureLoop {
       this.lastSource = source;
       if (this.status !== "running") return; // paused/ended while capturing: drop it
       const label = `${front.app} — ${front.title || "(untitled)"}`;
+      this.opts.onObserve?.({ page: source, title: front.title, changed: !res.skipped });
       if (res.skipped) {
         stats.unchanged++;
         this.log(`unchanged (${(res.changeRatio * 100).toFixed(1)}% different)  ${label}`);

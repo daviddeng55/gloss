@@ -57,6 +57,12 @@ export default function History() {
       <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-card">
         <div className="drag h-12 shrink-0" />
         <h1 className="px-4 pb-2 text-2xl font-bold tracking-tight">History</h1>
+        <button
+          onClick={() => void window.api.openLearn()}
+          className="mx-2 mb-1 rounded-lg px-2 py-1.5 text-left font-medium text-accent hover:bg-accent-soft"
+        >
+          How you learn →
+        </button>
         <nav className="flex-1 overflow-y-auto px-2 pb-4">
           {sessions === null ? null : sessions.length === 0 ? (
             <p className="px-2 py-6 text-muted">

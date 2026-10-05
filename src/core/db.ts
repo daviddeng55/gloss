@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { ChunkRow, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
 import type { Passage, QuizDraft } from "./ai.ts";
+import { conceptKey, type Evidence, type HintLevelName } from "./learner.ts";
 import type { NewChunk } from "./chunker.ts";
 
 // Each entry upgrades the database by one version. Never edit a released entry; add a new one.
@@ -64,6 +65,36 @@ const MIGRATIONS = [
      answers      TEXT NOT NULL DEFAULT '[]'  -- JSON [{level, text, at}]
    );
    CREATE INDEX questions_session ON questions(session_id, asked_at);`,
+  // 4: Stage 5 — the learner model. Mastery isn't stored: it's worked out from the evidence (learner.ts).
+  `CREATE TABLE concepts (
+     id         TEXT PRIMARY KEY,
+     course_id  TEXT NOT NULL,
+     name       TEXT NOT NULL,
+     key        TEXT NOT NULL,            -- normalized name, for matching
+     created_at TEXT NOT NULL,
+     embedding  BLOB,
+     UNIQUE (course_id, key)
+   );
+   CREATE TABLE concept_chunks (
+     concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+     chunk_id   TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+     session_id TEXT NOT NULL,
+     PRIMARY KEY (concept_id, chunk_id)
+   );
+   CREATE TABLE evidence (
+     id         TEXT PRIMARY KEY,
+     concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+     at         TEXT NOT NULL,
+     kind       TEXT NOT NULL,            -- covered | quiz | ask | manual
+     correct    INTEGER,
+     hint_level TEXT,
+     session_id TEXT,
+     ref_id     TEXT                      -- quiz item or question it came from
+   );
+   CREATE INDEX evidence_concept ON evidence(concept_id, at);
+   CREATE INDEX concept_chunks_session ON concept_chunks(session_id);
+   ALTER TABLE quiz_items ADD COLUMN concept_id TEXT;
+   ALTER TABLE questions ADD COLUMN concept_id TEXT;`,
 ];
 
 type Row = Record<string, any>;
@@ -172,14 +203,14 @@ export class StudyDb {
   /** Saves a new quiz (replacing none: a session gets one quiz). */
   saveQuiz(sessionId: string, courseId: string, questions: QuizDraft[]) {
     const insert = this.db.prepare(
-      `INSERT INTO quiz_items (id, course_id, session_id, chunk_id, position, type, question, options, answer, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO quiz_items (id, course_id, session_id, chunk_id, position, type, question, options, answer, created_at, concept_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const now = new Date().toISOString();
     this.db.exec("BEGIN");
     questions.forEach((q, i) =>
       insert.run(randomUUID(), courseId, sessionId, q.passageId, i, q.type, q.question,
-        q.options ? JSON.stringify(q.options) : null, q.answer, now),
+        q.options ? JSON.stringify(q.options) : null, q.answer, now, q.conceptId ?? null),
     );
     this.db.prepare("UPDATE sessions SET quiz_total = ?, quiz_correct = 0, quiz_note = NULL WHERE id = ?").run(questions.length, sessionId);
     this.db.exec("COMMIT");
@@ -227,11 +258,11 @@ export class StudyDb {
    * Records an answer. The session score counts each question's first answer. Spaced review (used in
    * Stage 5): wrong comes back next session; right comes back after 3 days, then 7, then 14.
    */
-  recordAnswer(id: string, a: { correct: boolean; response: string; explanation: string; at: string }) {
+  recordAnswer(id: string, a: { correct: boolean; response: string; explanation: string; at: string; intervalDays?: number }) {
     const r = this.db.prepare("SELECT session_id, history, interval_days FROM quiz_items WHERE id = ?").get(id) as Row;
     const history = [...JSON.parse(r.history), { at: a.at, correct: a.correct, response: a.response }];
     const steps = [3, 7, 14];
-    const interval = a.correct ? (steps.find((d) => d > (r.interval_days ?? 0)) ?? 14) : 0;
+    const interval = a.intervalDays ?? (a.correct ? (steps.find((d) => d > (r.interval_days ?? 0)) ?? 14) : 0);
     const due = new Date(Date.parse(a.at) + interval * 86_400_000).toISOString();
     this.db
       .prepare("UPDATE quiz_items SET history = ?, interval_days = ?, next_due_at = ?, explanation = ? WHERE id = ?")
@@ -268,6 +299,184 @@ export class StudyDb {
       question: r.question,
       sourceTitle: r.source_title ?? "",
       answers: JSON.parse(r.answers),
+    }));
+  }
+
+  // ---------- Stage 5: learner model ----------
+
+  /** Finds or creates a concept for this course by (normalized) name. */
+  upsertConcept(courseId: string, name: string): string {
+    const key = conceptKey(name);
+    const found = this.db.prepare("SELECT id FROM concepts WHERE course_id = ? AND key = ?").get(courseId, key) as Row | undefined;
+    if (found) return found.id;
+    const id = randomUUID();
+    this.db
+      .prepare("INSERT INTO concepts (id, course_id, name, key, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(id, courseId, name.trim().slice(0, 120), key, new Date().toISOString());
+    return id;
+  }
+
+  linkConcept(conceptId: string, chunkId: string, sessionId: string) {
+    this.db.prepare("INSERT OR IGNORE INTO concept_chunks (concept_id, chunk_id, session_id) VALUES (?, ?, ?)").run(conceptId, chunkId, sessionId);
+  }
+
+  addEvidence(conceptId: string, e: Evidence & { sessionId?: string; refId?: string }): string {
+    const id = randomUUID();
+    this.db
+      .prepare("INSERT INTO evidence (id, concept_id, at, kind, correct, hint_level, session_id, ref_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, conceptId, e.at, e.kind, e.correct === undefined ? null : e.correct ? 1 : 0, e.hintLevel ?? null, e.sessionId ?? null, e.refId ?? null);
+    return id;
+  }
+
+  /** Raises the hint level recorded for a question as you climb the hint ladder. */
+  raiseAskLevel(questionId: string, level: HintLevelName) {
+    const order = ["nudge", "explain", "example"];
+    const r = this.db.prepare("SELECT id, hint_level FROM evidence WHERE kind = 'ask' AND ref_id = ?").get(questionId) as Row | undefined;
+    if (r && order.indexOf(level) > order.indexOf(r.hint_level)) {
+      this.db.prepare("UPDATE evidence SET hint_level = ? WHERE id = ?").run(level, r.id);
+    }
+  }
+
+  hasCoveredEvidence(conceptId: string, sessionId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM evidence WHERE concept_id = ? AND session_id = ? AND kind = 'covered'").get(conceptId, sessionId);
+  }
+
+  /** Concepts with their evidence, for one course or all. */
+  getConcepts(courseId?: string): { id: string; courseId: string; name: string; createdAt: string; evidence: (Evidence & { sessionId?: string })[] }[] {
+    const rows = (courseId
+      ? this.db.prepare("SELECT * FROM concepts WHERE course_id = ? ORDER BY created_at").all(courseId)
+      : this.db.prepare("SELECT * FROM concepts ORDER BY created_at").all()) as Row[];
+    const ev = this.db.prepare("SELECT * FROM evidence WHERE concept_id = ? ORDER BY at");
+    return rows.map((r) => ({
+      id: r.id,
+      courseId: r.course_id,
+      name: r.name,
+      createdAt: r.created_at,
+      evidence: (ev.all(r.id) as Row[]).map((e) => ({
+        at: e.at,
+        kind: e.kind,
+        correct: e.correct === null ? undefined : !!e.correct,
+        hintLevel: e.hint_level ?? undefined,
+        sessionId: e.session_id ?? undefined,
+      })),
+    }));
+  }
+
+  /** Concept ids covered in a session, with the chunks that show each. */
+  sessionConcepts(sessionId: string): { conceptId: string; chunkIds: string[] }[] {
+    const rows = this.db.prepare("SELECT concept_id, chunk_id FROM concept_chunks WHERE session_id = ?").all(sessionId) as Row[];
+    const map = new Map<string, string[]>();
+    for (const r of rows) map.set(r.concept_id, [...(map.get(r.concept_id) ?? []), r.chunk_id]);
+    return [...map].map(([conceptId, chunkIds]) => ({ conceptId, chunkIds }));
+  }
+
+  /** Where a concept appears: its passages with session dates (newest first). */
+  conceptSources(conceptId: string): { chunkId: string; sessionId: string; startedAt: string; sourceTitle: string; text: string }[] {
+    return (this.db
+      .prepare(
+        `SELECT c.id AS chunk_id, c.session_id, s.started_at, c.source_title, c.text
+         FROM concept_chunks cc JOIN chunks c ON c.id = cc.chunk_id JOIN sessions s ON s.id = c.session_id
+         WHERE cc.concept_id = ? ORDER BY s.started_at DESC, c.captured_at`,
+      )
+      .all(conceptId) as Row[]).map((r) => ({ chunkId: r.chunk_id, sessionId: r.session_id, startedAt: r.started_at, sourceTitle: r.source_title, text: r.text }));
+  }
+
+  setManual(conceptId: string, known: boolean | null) {
+    this.db.prepare("DELETE FROM evidence WHERE concept_id = ? AND kind = 'manual'").run(conceptId);
+    if (known !== null) this.addEvidence(conceptId, { at: new Date().toISOString(), kind: "manual", correct: known });
+  }
+
+  deleteConcept(conceptId: string) {
+    this.db.prepare("UPDATE quiz_items SET concept_id = NULL WHERE concept_id = ?").run(conceptId);
+    this.db.prepare("UPDATE questions SET concept_id = NULL WHERE concept_id = ?").run(conceptId);
+    this.db.prepare("DELETE FROM concepts WHERE id = ?").run(conceptId);
+  }
+
+  /** Deletes the learner model for one course (or everything). Your notes and sessions stay. */
+  deleteLearnerModel(courseId?: string) {
+    this.db.exec("BEGIN");
+    if (courseId) {
+      this.db.prepare("UPDATE quiz_items SET concept_id = NULL WHERE course_id = ?").run(courseId);
+      this.db.prepare("UPDATE questions SET concept_id = NULL WHERE course_id = ?").run(courseId);
+      this.db.prepare("DELETE FROM concepts WHERE course_id = ?").run(courseId);
+    } else {
+      this.db.exec("UPDATE quiz_items SET concept_id = NULL; UPDATE questions SET concept_id = NULL; DELETE FROM concepts;");
+    }
+    this.db.exec("COMMIT");
+  }
+
+  setQuestionConcept(questionId: string, conceptId: string) {
+    this.db.prepare("UPDATE questions SET concept_id = ? WHERE id = ?").run(conceptId, questionId);
+  }
+
+  /** Concepts asked about in this session, with the highest hint level reached. */
+  askedThisSession(sessionId: string): Map<string, HintLevelName> {
+    const rows = this.db
+      .prepare("SELECT concept_id, hint_level FROM evidence WHERE kind = 'ask' AND session_id = ? ORDER BY at")
+      .all(sessionId) as Row[];
+    return new Map(rows.map((r) => [r.concept_id, r.hint_level]));
+  }
+
+  /** Quiz questions due for review in a course: wrong ones first, then by due date. */
+  dueQuizItems(courseId: string, now: string, limit: number): string[] {
+    return (this.db
+      .prepare(
+        `SELECT id FROM quiz_items
+         WHERE course_id = ? AND json_array_length(history) > 0 AND next_due_at IS NOT NULL AND next_due_at <= ?
+         ORDER BY json_extract(history, '$[#-1].correct') ASC, next_due_at ASC LIMIT ?`,
+      )
+      .all(courseId, now, limit) as Row[]).map((r) => r.id);
+  }
+
+  getQuizItemsByIds(ids: string[]): QuizItemView[] {
+    const one = this.db.prepare("SELECT * FROM quiz_items WHERE id = ?");
+    return ids
+      .map((id) => one.get(id) as Row | undefined)
+      .filter((r): r is Row => !!r)
+      .map((r) => ({ id: r.id, chunkId: r.chunk_id ?? undefined, type: r.type, question: r.question, options: r.options ? JSON.parse(r.options) : undefined }));
+  }
+
+  quizItemConcept(itemId: string): { conceptId?: string; intervalDays: number; sessionId: string; courseId: string } | null {
+    const r = this.db.prepare("SELECT concept_id, interval_days, session_id, course_id FROM quiz_items WHERE id = ?").get(itemId) as Row | undefined;
+    return r ? { conceptId: r.concept_id ?? undefined, intervalDays: r.interval_days ?? 0, sessionId: r.session_id, courseId: r.course_id } : null;
+  }
+
+  // ---------- Stage 5: course memory ----------
+
+  /** Every passage of a course (optionally without one session), for searching. */
+  coursePassages(courseId: string, excludeSessionId?: string): (Passage & { sessionId: string; startedAt: string; embedding?: Float32Array })[] {
+    return (this.db
+      .prepare(
+        `SELECT c.id, c.text, c.source_title, c.session_id, c.embedding, s.started_at FROM chunks c JOIN sessions s ON s.id = c.session_id
+         WHERE c.course_id = ? AND (? IS NULL OR c.session_id <> ?) ORDER BY c.captured_at`,
+      )
+      .all(courseId, excludeSessionId ?? null, excludeSessionId ?? null) as Row[]).map((r) => ({
+      id: r.id,
+      text: r.text,
+      sourceTitle: r.source_title,
+      sessionId: r.session_id,
+      startedAt: r.started_at,
+      embedding: r.embedding ? new Float32Array(new Uint8Array(r.embedding).buffer) : undefined,
+    }));
+  }
+
+  chunksWithoutEmbedding(limit: number): { id: string; text: string }[] {
+    return this.db.prepare("SELECT id, text FROM chunks WHERE embedding IS NULL LIMIT ?").all(limit) as { id: string; text: string }[];
+  }
+
+  setChunkEmbedding(chunkId: string, vector: number[]) {
+    this.db.prepare("UPDATE chunks SET embedding = ? WHERE id = ?").run(new Uint8Array(new Float32Array(vector).buffer), chunkId);
+  }
+
+  setConceptEmbedding(conceptId: string, vector: number[]) {
+    this.db.prepare("UPDATE concepts SET embedding = ? WHERE id = ?").run(new Uint8Array(new Float32Array(vector).buffer), conceptId);
+  }
+
+  conceptEmbeddings(courseId: string): { id: string; name: string; embedding?: Float32Array }[] {
+    return (this.db.prepare("SELECT id, name, embedding FROM concepts WHERE course_id = ?").all(courseId) as Row[]).map((r) => ({
+      id: r.id,
+      name: r.name,
+      embedding: r.embedding ? new Float32Array(new Uint8Array(r.embedding).buffer) : undefined,
     }));
   }
 

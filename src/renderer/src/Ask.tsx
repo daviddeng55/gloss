@@ -9,7 +9,15 @@ const LEVELS: { id: HintLevelId; label: string }[] = [
   { id: "example", label: "Worked example of a similar problem" },
 ];
 
-type Turn = { level: HintLevelId; question: string; text: string; status: "streaming" | "done" | "error" };
+type Turn = {
+  level: HintLevelId;
+  question: string;
+  text: string;
+  status: "streaming" | "done" | "error";
+  reason?: string;
+  concept?: string;
+  sources?: { title: string; when: string }[];
+};
 
 export default function Ask({ askId }: { askId: string }) {
   const [info, setInfo] = useState<AskInfo | null>(null);
@@ -29,11 +37,12 @@ export default function Ask({ askId }: { askId: string }) {
       setTurns((ts) => {
         const next = [...ts];
         if (e.type === "start") {
-          next[e.turn] = { level: e.level, question: e.question, text: "", status: "streaming" };
+          next[e.turn] = { level: e.level, question: e.question, text: "", status: "streaming", reason: e.reason, concept: e.concept };
           setAsked((a) => a || e.question); // also when the question didn't come from the box (e.g. voice)
         }
         else if (next[e.turn]) {
           const t = { ...next[e.turn] };
+          if (e.type === "sources") t.sources = e.sources;
           if (e.type === "text") t.text += e.text;
           if (e.type === "done") t.status = "done";
           if (e.type === "error") Object.assign(t, { status: "error", text: e.message });
@@ -56,7 +65,7 @@ export default function Ask({ askId }: { askId: string }) {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [turns]);
 
-  function send(level: HintLevelId, q = asked || question) {
+  function send(level: HintLevelId | "auto", q = asked || question) {
     if (busy || !q.trim()) return;
     setAsked(q.trim());
     void window.api.ask(askId, q.trim(), level);
@@ -86,7 +95,7 @@ export default function Ask({ askId }: { askId: string }) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              send("nudge", question);
+              send("auto", question);
             }}
             className="flex flex-col gap-2"
           >
@@ -98,7 +107,7 @@ export default function Ask({ askId }: { askId: string }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  send("nudge", question);
+                  send("auto", question);
                 }
               }}
               rows={3}
@@ -127,7 +136,7 @@ export default function Ask({ askId }: { askId: string }) {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     setEditing(false);
-                    send("nudge", e.currentTarget.value);
+                    send("auto", e.currentTarget.value);
                   }
                   if (e.key === "Escape") {
                     e.stopPropagation();
@@ -148,7 +157,12 @@ export default function Ask({ askId }: { askId: string }) {
             )}
             {turns.map((t, i) => (
               <div key={i} className="rounded-2xl border border-line bg-card p-4 shadow-sm">
-                <p className="mb-2 text-xs font-bold tracking-wide text-accent">{LEVELS.find((l) => l.id === t.level)?.label}</p>
+                <p className="text-xs font-bold tracking-wide text-accent">
+                  {LEVELS.find((l) => l.id === t.level)?.label}
+                  {t.concept ? <span className="font-medium text-muted"> · {t.concept}</span> : null}
+                </p>
+                {t.reason ? <p className="mt-0.5 text-xs text-muted italic">{t.reason}</p> : null}
+                <div className="mb-2" />
                 {t.status === "error" ? (
                   <p className="text-bad">{t.text}</p>
                 ) : t.text ? (
@@ -159,6 +173,11 @@ export default function Ask({ askId }: { askId: string }) {
                     Thinking… (the first answer can take ~15 s while the model loads)
                   </p>
                 )}
+                {t.sources?.length && t.status !== "error" ? (
+                  <p className="mt-3 border-t border-line pt-2 text-xs text-muted">
+                    Sources: {t.sources.map((s) => `${s.when} — ${s.title}`).join(" · ")}
+                  </p>
+                ) : null}
               </div>
             ))}
             <div ref={bottom} />

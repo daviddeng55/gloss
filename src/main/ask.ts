@@ -3,13 +3,14 @@
 // cursor) is captured and a popup opens where you ask about it. Esc cancels.
 import { BrowserWindow, globalShortcut, Notification, screen } from "electron";
 import { randomUUID } from "node:crypto";
-import { askAboutImage, HINT_LEVELS, relevantPassages, type HintLevel } from "../core/ai.ts";
+import { askAboutImage, HINT_LEVELS, type HintLevel } from "../core/ai.ts";
 import { cropFor, type Point } from "../core/crop.ts";
 import type { StudyDb } from "../core/db.ts";
 import type { VisionHelper } from "../core/helper.ts";
 import { blockedReason, pickFrontWindow, type NeverRecord } from "../core/privacy.ts";
 import type { Settings } from "../core/settings.ts";
 import { VoiceHelper } from "../core/voice.ts";
+import type { LearnerService } from "./learner.ts";
 import type { AskEvent, AskInfo, OverlayEvent } from "../shared/types.ts";
 
 /** What the ask feature needs from the running session. */
@@ -31,6 +32,7 @@ type Ask = {
   questionId?: string;
   turns: { question: string; level: HintLevel; answer: string }[];
   busy: boolean;
+  concept?: { id: string; name: string }; // what the learner model thinks this is about
   window: BrowserWindow;
 };
 
@@ -66,6 +68,7 @@ export class AskController {
     preload: string;
     load: (win: BrowserWindow, route: string) => void;
     voicePaths: { visionHelper: string; voice: string };
+    learner: LearnerService;
   };
 
   constructor(settings: Settings, deps: AskController["deps"]) {
@@ -363,7 +366,7 @@ export class AskController {
       win.show();
       win.focus();
       // A spoken question is asked straight away (you can still edit it and ask again).
-      if (spoken) setTimeout(() => void this.ask(askId, spoken, "nudge"), 150);
+      if (spoken) setTimeout(() => void this.ask(askId, spoken, "auto"), 150);
     });
     this.deps.load(win, `ask/${askId}`);
   }
@@ -373,7 +376,12 @@ export class AskController {
   }
 
   /** Answers at a hint level, streaming to the popup. The first question is saved to the session. */
-  async ask(askId: string, question: string, level: HintLevel) {
+  /**
+   * Answers at a hint level, streaming to the popup. "auto" (a new question) lets the learner model
+   * choose where to start: what has helped you with this concept before, or a different approach
+   * if you already asked about it today.
+   */
+  async ask(askId: string, question: string, requested: HintLevel | "auto") {
     const a = this.asks.get(askId);
     if (!a || a.busy) return;
     const q = question.trim().slice(0, 2000);
@@ -383,27 +391,36 @@ export class AskController {
     const emit = (e: AskEvent) => {
       if (!a.window.isDestroyed()) a.window.webContents.send("ask:event", e);
     };
-    emit({ askId, type: "start", turn, level, question: q });
+    const learner = this.deps.learner;
     try {
       // A new or edited question is saved as its own question; hint-ladder follow-ups add answers to it.
       const previous = a.turns[a.turns.length - 1]?.question;
-      if (!a.questionId || (previous !== undefined && previous !== q)) {
+      const isNew = !a.questionId || (previous !== undefined && previous !== q);
+      if (isNew) {
         a.questionId = this.deps.db.addQuestion(a.sessionId, a.courseId, q, a.info.sourceTitle);
+        a.concept = (await learner.conceptForQuestion(a.courseId, q).catch(() => null)) ?? undefined;
       }
-      const passages = relevantPassages(q, this.deps.db.getPassages(a.sessionId));
+      let level: HintLevel = requested === "auto" ? "nudge" : requested;
+      let reason = "";
+      if (requested === "auto") ({ level, reason } = learner.startLevel(a.sessionId, a.concept?.id ?? null));
+      emit({ askId, type: "start", turn, level, question: q, reason, concept: a.concept?.name });
+
+      // This session's notes plus related ones from earlier sessions of the course.
+      const passages = await learner.passagesFor(a.courseId, a.sessionId, q);
+      emit({
+        askId,
+        type: "sources",
+        turn,
+        sources: passages.map((p) => ({ title: p.sourceTitle || "unknown window", when: p.when })),
+      });
+      const note = learner.learnerNote(a.concept?.id ?? null, learner.connections(a.sessionId, a.courseId));
       const answer = await askAboutImage(
-        {
-          imageBase64: a.imageBase64,
-          question: q,
-          course: a.info.courseName,
-          level,
-          passages,
-          earlier: a.turns,
-        },
+        { imageBase64: a.imageBase64, question: q, course: a.info.courseName, level, passages, earlier: a.turns, learner: note },
         (text) => emit({ askId, type: "text", turn, text }),
       );
       a.turns.push({ question: q, level, answer });
-      this.deps.db.addAnswer(a.questionId, HINT_LEVELS[level].label, answer);
+      this.deps.db.addAnswer(a.questionId!, HINT_LEVELS[level].label, answer);
+      if (a.concept) learner.recordAsk(a.sessionId, a.questionId!, a.concept.id, level, isNew);
       emit({ askId, type: "done", turn });
     } catch (err) {
       emit({ askId, type: "error", turn, message: (err as Error).message });

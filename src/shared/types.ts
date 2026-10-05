@@ -38,7 +38,7 @@ export type SessionDetail = SessionRow & { chunks: ChunkRow[]; questions: Questi
 
 /** What a session covered (or why it couldn't be summarized). */
 export type SummaryData =
-  | { ok: true; points: { text: string; passageIds: string[] }[] }
+  | { ok: true; points: { text: string; passageIds: string[]; concept?: string }[] }
   | { ok: false; reason: string };
 
 export type QuizItemView = {
@@ -63,9 +63,45 @@ export type ReviewData = {
   summary: { status: TaskStatus; data?: SummaryData; error?: string };
   quiz: { status: TaskStatus; items: QuizItemView[]; note?: string; error?: string };
   passages: Record<string, { text: string; sourceTitle: string; capturedAt: string }>;
+  connections: Connection[];
 };
 
 export type AnswerResult = { correct: boolean; answer: string; explanation: string };
+
+// ---------- Stage 5: the learner model ----------
+
+export type HelpCounts = { nudge: number; explain: number; example: number };
+
+export type LearnConcept = {
+  id: string;
+  courseId: string;
+  name: string;
+  current: number; // mastery now, 0–1 (after fading)
+  confidence: number; // 0–1
+  lastPracticedAt?: string;
+  helps: HelpCounts;
+  quizzes: { right: number; wrong: number };
+  asks: number;
+  why: string[];
+  override: boolean | null; // you marked it known (true) / not known (false)
+  sources: { sessionId: string; startedAt: string; sourceTitle: string }[];
+};
+
+export type LearnProfile = {
+  courses: { courseId: string; courseName: string; concepts: LearnConcept[] }[];
+  overall: HelpCounts;
+  memoryByMeaning: boolean; // embedding model available
+};
+
+/** An earlier concept today's material builds on, that you've found hard. */
+export type Connection = { conceptId: string; name: string; current: number; lastStudied: string };
+
+export type WarmupData = {
+  sessionId: string;
+  courseName: string;
+  items: QuizItemView[];
+  passages: Record<string, { text: string; sourceTitle: string; capturedAt: string }>;
+};
 
 /** Stage 4: one "circle and ask" conversation about a screenshot crop. */
 export type AskInfo = {
@@ -88,7 +124,8 @@ export type OverlayEvent =
 export type HintLevelId = "nudge" | "explain" | "example";
 
 export type AskEvent =
-  | { askId: string; type: "start"; turn: number; level: HintLevelId; question: string }
+  | { askId: string; type: "start"; turn: number; level: HintLevelId; question: string; reason?: string; concept?: string }
+  | { askId: string; type: "sources"; turn: number; sources: { title: string; when: string }[] }
   | { askId: string; type: "text"; turn: number; text: string }
   | { askId: string; type: "done"; turn: number }
   | { askId: string; type: "error"; turn: number; message: string };
@@ -126,7 +163,13 @@ export interface StudyApi {
   onReview(callback: (sessionId: string) => void): () => void;
   closeWindow(): Promise<void>;
   askInfo(askId: string): Promise<AskInfo | null>;
-  ask(askId: string, question: string, level: HintLevelId): Promise<void>;
+  ask(askId: string, question: string, level: HintLevelId | "auto"): Promise<void>;
+  getLearnProfile(): Promise<LearnProfile>;
+  markConcept(conceptId: string, known: boolean | null): Promise<void>;
+  deleteConcept(conceptId: string): Promise<void>;
+  deleteLearnerModel(courseId: string | null): Promise<void>;
+  openLearn(): Promise<void>;
+  getWarmup(sessionId: string): Promise<WarmupData | null>;
   onAsk(callback: (e: AskEvent) => void): () => void;
   onOverlay(callback: (e: OverlayEvent) => void): () => void;
   overlayClick(): Promise<void>;
