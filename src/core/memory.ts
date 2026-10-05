@@ -41,12 +41,13 @@ export function searchPassages(
   const maxKw = Math.max(1e-9, ...kw);
   const scored = passages.map((p, i) => {
     const byMeaning = opts.queryEmbedding && p.embedding ? cosine(opts.queryEmbedding, p.embedding) : undefined;
-    // Meaning when we have it (0–1, ~0.5+ is related); otherwise words, scaled to a similar range.
+    // Meaning when we have it (cosine 0–1); otherwise words, scaled to a similar range.
     const score = byMeaning !== undefined ? byMeaning : (kw[i] / maxKw) * 0.7;
     return { ...p, score };
   });
   return scored
-    .filter((p) => p.score >= (opts.minScore ?? (opts.queryEmbedding ? 0.45 : 0.2)))
+    // embeddinggemma: related ≈ 0.3–0.5, unrelated ≈ 0.1–0.2 (measured on real notes).
+    .filter((p) => p.score >= (opts.minScore ?? (opts.queryEmbedding ? 0.3 : 0.2)))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }
@@ -56,6 +57,8 @@ export function matchConcept(
   question: string,
   concepts: { id: string; name: string; embedding?: Float32Array }[],
   queryEmbedding?: number[],
+  /** Extra score for concepts linked to the notes that best match the question. */
+  boost: Map<string, number> = new Map(),
 ): string | null {
   let best: { id: string; score: number } | null = null;
   const q = new Set(words(question));
@@ -66,8 +69,9 @@ export function matchConcept(
       const cw = words(c.name);
       score = cw.length ? cw.filter((w) => q.has(w) || [...q].some((x) => x.startsWith(w.slice(0, 5)) && w.length > 5)).length / cw.length : 0;
     }
+    score += boost.get(c.id) ?? 0;
     if (!best || score > best.score) best = { id: c.id, score };
   }
-  const threshold = queryEmbedding ? 0.55 : 0.5;
+  const threshold = queryEmbedding ? 0.33 : 0.5;
   return best && best.score >= threshold ? best.id : null;
 }

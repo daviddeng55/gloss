@@ -98,8 +98,11 @@ export class LearnerService {
     const concepts = this.db.conceptEmbeddings(courseId);
     if (!concepts.length) return null;
     let qEmb: number[] | undefined;
-    if (await this.embeddingsOn()) qEmb = (await embed([question]).catch(() => [undefined]))[0];
-    const id = matchConcept(question, concepts, qEmb);
+    if (await this.embeddingsOn()) qEmb = (await embed([question], "query").catch(() => [undefined]))[0];
+    // Notes that match the question vote for the concepts they're linked to.
+    const top = searchPassages(question, this.db.coursePassages(courseId), { queryEmbedding: qEmb, limit: 2 });
+    const boost = new Map(this.db.conceptsForChunks(top.map((p) => p.id)).map((id) => [id, 0.08]));
+    const id = matchConcept(question, concepts, qEmb, boost);
     return id ? { id, name: concepts.find((c) => c.id === id)!.name } : null;
   }
 
@@ -142,7 +145,7 @@ export class LearnerService {
   async passagesFor(courseId: string, sessionId: string, question: string): Promise<(MemoryPassage & { when: string })[]> {
     const all = this.db.coursePassages(courseId);
     let qEmb: number[] | undefined;
-    if ((await this.embeddingsOn()) && all.some((p) => p.embedding)) qEmb = (await embed([question]).catch(() => [undefined]))[0];
+    if ((await this.embeddingsOn()) && all.some((p) => p.embedding)) qEmb = (await embed([question], "query").catch(() => [undefined]))[0];
     const today = searchPassages(question, all.filter((p) => p.sessionId === sessionId), { queryEmbedding: qEmb, limit: 3 });
     const earlier = searchPassages(question, all.filter((p) => p.sessionId !== sessionId), { queryEmbedding: qEmb, limit: 2 });
     let chars = 0;

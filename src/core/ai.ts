@@ -817,13 +817,18 @@ export async function embeddingsAvailable(cfg: AiConfig = EMBEDDER): Promise<boo
   }
 }
 
-export function embed(texts: string[], cfg: AiConfig = EMBEDDER): Promise<number[][]> {
+/**
+ * `as` says what the text is: embeddinggemma matches better when a search question and the notes it
+ * should find are labelled differently (its documented prompt format).
+ */
+export function embed(texts: string[], as: "query" | "document" = "document", cfg: AiConfig = EMBEDDER): Promise<number[][]> {
+  const prefix = as === "query" ? "task: search result | query: " : "title: none | text: ";
   return withModel(cfg, async () => {
     const res = await fetch(`${cfg.baseUrl}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(120_000),
-      body: JSON.stringify({ model: cfg.model, input: texts.map((t) => t.slice(0, 4000)), keep_alive: KEEP_ALIVE }),
+      body: JSON.stringify({ model: cfg.model, input: texts.map((t) => prefix + t.slice(0, 4000)), keep_alive: KEEP_ALIVE }),
     }).catch(() => {
       throw new AiError("not-running", "Ollama isn't running.");
     });

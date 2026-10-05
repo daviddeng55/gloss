@@ -381,6 +381,13 @@ export class StudyDb {
       .all(conceptId) as Row[]).map((r) => ({ chunkId: r.chunk_id, sessionId: r.session_id, startedAt: r.started_at, sourceTitle: r.source_title, text: r.text }));
   }
 
+  /** Concepts linked to any of these passages. */
+  conceptsForChunks(chunkIds: string[]): string[] {
+    if (!chunkIds.length) return [];
+    const q = this.db.prepare(`SELECT DISTINCT concept_id FROM concept_chunks WHERE chunk_id IN (${chunkIds.map(() => "?").join(",")})`);
+    return (q.all(...chunkIds) as Row[]).map((r) => r.concept_id);
+  }
+
   setManual(conceptId: string, known: boolean | null) {
     this.db.prepare("DELETE FROM evidence WHERE concept_id = ? AND kind = 'manual'").run(conceptId);
     if (known !== null) this.addEvidence(conceptId, { at: new Date().toISOString(), kind: "manual", correct: known });
