@@ -208,7 +208,7 @@ export async function summarizeSession(
         role: "user",
         content: `Below are numbered passages of ${course} notes captured from the student's screen during one study session, in the order they were seen.${goal ? ` The student's goal was: "${goal}".` : ""}
 
-List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Keep math short and simple; plain notation like (x+y)/2 or sqrt(xy) is fine. Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads) and any passage that isn't ${course} course material (web searches, other courses, social media, unrelated sites) — leave those out entirely.
+List what the student covered, in order, as 3 to 8 short points (one sentence each, plain and specific, e.g. "Proof by strong induction: assume P(1)...P(k) to prove P(k+1)"). Keep math short and simple; plain notation like (x+y)/2 or sqrt(xy) is fine. Each point must come from the passages; give the passage numbers it came from in "sources". Do not add anything that isn't in the passages. Ignore stray interface text (menus, buttons, ads) and anything that isn't study material (web searches, social media, email, unrelated sites) — leave those out entirely. Course material from a different course still counts: summarize it.
 For each point also give "concept": the main idea it's about, as a short name (2–5 words, e.g. "strong induction", "limit of a recursive sequence").${knownConcepts.length ? ` Reuse one of these names from earlier sessions when it's the same idea: ${knownConcepts.slice(0, 80).map((c) => `"${c}"`).join(", ")}.` : ""}
 If the passages are too garbled or unrelated to the course to summarize honestly, set "enough" to false, explain why in "reason", and return no points. Otherwise set "enough" to true and "reason" to "".
 
@@ -287,13 +287,17 @@ export function ensureMathDelimiters(text: string): string {
   return /\\[a-zA-Z]+/.test(text) && !text.includes("$") ? `$${text}$` : text;
 }
 
-/** Keeps only well-formed questions. Exported for tests. */
+/** Questions that only make sense if you can see the notes ("Passage [3]", "Example 48", "the table"). */
+const NOT_SELF_CONTAINED = /\bpassages?\s*\[?\d|\[\d+\]|\b(example|theorem|exercise|problem|figure|table)\s+\d+|\bthe (table|passage|notes|text) (above|below|shown)/i;
+
+/** Keeps only well-formed, self-contained questions. Exported for tests. */
 export function validateQuestions(raw: RawQuestion[], used: Passage[]): QuizDraft[] {
   const out: QuizDraft[] = [];
   const seen = new Set<string>();
   for (const q of raw ?? []) {
     const question = ensureMathDelimiters(q.question?.trim() ?? "");
     if (!question || seen.has(question.toLowerCase())) continue;
+    if (NOT_SELF_CONTAINED.test(question)) continue;
     if (!(q.source >= 1 && q.source <= used.length)) continue;
     const passageId = used[q.source - 1].id;
     if (q.type === "multiple_choice") {
@@ -349,7 +353,7 @@ Write a quiz of 8 questions (at least 3 "multiple_choice" and at least 3 "short_
 - multiple_choice: 4 "options", exactly one correct; "correct_option" is its index starting at 0; "answer" is the correct option's text. Wrong options should be plausible.
 - short_answer: a question with a short answer (a few words or one sentence); "answer" is the model answer taken from the passage.
 - Write math in LaTeX between $...$.
-${opts.concepts?.length ? `- Concepts in this session, with how well the student knows each (0–100%):\n${opts.concepts.map((c, i) => `  C${i + 1}. ${c.name}: ${Math.round(c.mastery * 100)}%`).join("\n")}\n  Put most questions on the weakest concepts. Pitch difficulty to mastery: below 40% ask about the basic idea or definition; 40–70% ask how or why a step works; above 70% ask something that needs applying it. Give each question's concept number in "concept" (e.g. 2 for C2).\n` : `- Set "concept" to 0.\n`}${opts.askedQuestions?.length ? `- During the session the student asked about: ${opts.askedQuestions.map((q) => `"${q.slice(0, 200)}"`).join("; ")}. Include at least 2 questions on those topics if the passages cover them.\n` : ""}- Ignore stray interface text, anything that looks garbled, and any passage that isn't ${course} course material (web searches, other courses, unrelated sites). Never ask about those.
+${opts.concepts?.length ? `- Concepts in this session, with how well the student knows each (0–100%):\n${opts.concepts.map((c, i) => `  C${i + 1}. ${c.name}: ${Math.round(c.mastery * 100)}%`).join("\n")}\n  Put most questions on the weakest concepts. Pitch difficulty to mastery: below 40% ask about the basic idea or definition; 40–70% ask how or why a step works; above 70% ask something that needs applying it. Give each question's concept number in "concept" (e.g. 2 for C2).\n` : `- Set "concept" to 0.\n`}${opts.askedQuestions?.length ? `- During the session the student asked about: ${opts.askedQuestions.map((q) => `"${q.slice(0, 200)}"`).join("; ")}. Include at least 2 questions on those topics if the passages cover them.\n` : ""}- Ignore stray interface text, anything that looks garbled, and anything that isn't study material (web searches, social media, unrelated sites). Never ask about those.
 If the passages don't contain enough clear course material for good questions, set "enough" to false, explain in "reason", and return no questions. Otherwise "enough" is true and "reason" is "".
 
 ${text}`,

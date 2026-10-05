@@ -81,6 +81,21 @@ test("quiz validation keeps well-formed questions and finds the right option", (
   assert.equal(qs[2].passageId, "p2");
 });
 
+test("questions that point at things you can't see are dropped", () => {
+  const passages = [{ id: "p1", text: "t", sourceTitle: "" }];
+  const qs = validateQuestions(
+    [
+      { type: "short_answer", question: "According to Passage [1], what is the limit of 1/2^n?", answer: "0", source: 1 },
+      { type: "short_answer", question: "In Example 48, which sequences are compared?", answer: "x", source: 1 },
+      { type: "short_answer", question: "What does Theorem 46 conclude?", answer: "x", source: 1 },
+      { type: "short_answer", question: "If $a_n \\le b_n \\le c_n$ and both outer sequences tend to $L$, what is $\\lim b_n$?", answer: "$L$", source: 1 },
+    ],
+    passages,
+  );
+  assert.equal(qs.length, 1);
+  assert.match(qs[0].question, /outer sequences/);
+});
+
 test("bare LaTeX gets $ delimiters, text with $ is left alone", () => {
   assert.equal(ensureMathDelimiters("\\sum_{i=1}^n i"), "$\\sum_{i=1}^n i$");
   assert.equal(ensureMathDelimiters("It is $\\frac{1}{2}$"), "It is $\\frac{1}{2}$");
