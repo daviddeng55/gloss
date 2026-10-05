@@ -50,6 +50,20 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (b: boolean) => void 
   );
 }
 
+function ModelPicker({ value, installed, onChange }: { value: string; installed: string[]; onChange: (m: string) => void }) {
+  const options = installed.includes(value) ? installed : [value, ...installed];
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={`${input} w-44`}>
+      {options.map((m) => (
+        <option key={m} value={m}>
+          {m}
+          {!installed.includes(m) ? " (not downloaded)" : ""}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** An editable list of short strings (one per line). */
 function ListEditor({ items, onChange, placeholder }: { items: string[]; onChange: (items: string[]) => void; placeholder: string }) {
   return (
@@ -172,11 +186,14 @@ export default function Settings() {
 
           <Section title="AI models" note="Everything runs on your Mac through Ollama. Nothing is sent online.">
             {s.aiProblem ? <p className="rounded-lg bg-bad/15 px-3 py-2">⚠︎ {s.aiProblem}</p> : <p className="text-good">✓ Ollama is running.</p>}
+            <Row label="Summaries, quizzes and marking" hint="Runs after a session, in the background: a bigger model is slower but writes better quizzes.">
+              <ModelPicker value={s.settings.ai.reviewModel} installed={s.installed ?? []} onChange={(m) => update((d) => void (d.settings.ai.reviewModel = m))} />
+            </Row>
+            <Row label="Circle and ask" hint="Answers while you wait: a smaller model is faster.">
+              <ModelPicker value={s.settings.ai.askModel} installed={s.installed ?? []} onChange={(m) => update((d) => void (d.settings.ai.askModel = m))} />
+            </Row>
             {s.models ? (
               <ul className="space-y-1 text-[13px]">
-                <li>
-                  <span className="text-muted">Tutor (summaries, quizzes, answers):</span> {s.models.tutor}
-                </li>
                 <li>
                   <span className="text-muted">Math reader (math courses):</span> {s.models.math}
                 </li>

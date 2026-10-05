@@ -3,7 +3,7 @@
 // cursor) is captured and a popup opens where you ask about it. Esc cancels.
 import { BrowserWindow, globalShortcut, Notification, screen } from "electron";
 import { randomUUID } from "node:crypto";
-import { askAboutImage, HINT_LEVELS, type HintLevel } from "../core/ai.ts";
+import { askAboutImage, DEFAULT_AI, HINT_LEVELS, type HintLevel } from "../core/ai.ts";
 import { cropFor, type Point } from "../core/crop.ts";
 import type { StudyDb } from "../core/db.ts";
 import type { VisionHelper } from "../core/helper.ts";
@@ -417,6 +417,7 @@ export class AskController {
       const answer = await askAboutImage(
         { imageBase64: a.imageBase64, question: q, course: a.info.courseName, level, passages, earlier: a.turns, learner: note },
         (text) => emit({ askId, type: "text", turn, text }),
+        { ...DEFAULT_AI, model: this.settings.ai.askModel },
       );
       a.turns.push({ question: q, level, answer });
       this.deps.db.addAnswer(a.questionId!, HINT_LEVELS[level].label, answer);

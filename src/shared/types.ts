@@ -5,13 +5,15 @@ export type Course = { id: string; name: string; math?: boolean };
 /** What the Settings window edits. */
 export type SettingsView = {
   settings: {
+    ai: { reviewModel: string; askModel: string };
     capture: { intervalSeconds: number; dwellSeconds: number };
     learn: { offerHelpWhenStuck: boolean };
     ask: { shortcut: string; voice: boolean; locale: string; fallbackW: number; fallbackH: number; padding: number; minCircle: number };
   };
   courses: Course[];
   neverRecord: { apps: string[]; titles: string[] };
-  models?: { tutor: string; math: string; memory: string };
+  models?: { math: string; memory: string };
+  installed?: string[];
   aiProblem?: string;
 };
 

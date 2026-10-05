@@ -1,6 +1,6 @@
 // End-of-session review: generates the summary and quiz in the background (one session at a time,
 // so the laptop only runs one AI job at once), saves them, and marks answers.
-import { AiError, checkAi, checkAnswer, makeQuiz, summarizeSession, verifyQuestions, type QuizDraft } from "../core/ai.ts";
+import { AiError, checkAi, checkAnswer, DEFAULT_AI, makeQuiz, summarizeSession, verifyQuestions, type AiConfig, type QuizDraft } from "../core/ai.ts";
 import type { StudyDb } from "../core/db.ts";
 import { reviewIntervalDays } from "../core/learner.ts";
 import type { AnswerResult, Course, ReviewData, TaskStatus } from "../shared/types.ts";
@@ -20,11 +20,25 @@ export class ReviewService {
   private changed: (sessionId: string) => void;
   private learner: LearnerService;
 
-  constructor(db: StudyDb, courses: () => Course[], learner: LearnerService, changed: (sessionId: string) => void) {
+  private reviewModel: () => string;
+
+  constructor(
+    db: StudyDb,
+    courses: () => Course[],
+    learner: LearnerService,
+    changed: (sessionId: string) => void,
+    reviewModel: () => string = () => DEFAULT_AI.model,
+  ) {
+    this.reviewModel = reviewModel;
     this.learner = learner;
     this.db = db;
     this.courses = courses;
     this.changed = changed;
+  }
+
+  /** The model chosen in Settings for summaries, quizzes and marking. */
+  private model(): AiConfig {
+    return { ...DEFAULT_AI, model: this.reviewModel() };
   }
 
   private courseName(courseId: string) {
@@ -88,7 +102,7 @@ export class ReviewService {
     await this.saving.get(sessionId)?.catch(() => {});
     const session = this.db.getSession(sessionId);
     if (!session) return;
-    const ai = await checkAi();
+    const ai = await checkAi(this.model());
     if (!ai.ok) {
       const p = this.status(sessionId);
       this.set(sessionId, {
@@ -104,7 +118,7 @@ export class ReviewService {
       this.set(sessionId, { summary: "working" });
       try {
         // Reuse concept names from earlier sessions so the learner model adds up over time.
-        const summary = await summarizeSession(passages, course, session.goal, undefined, this.learner.knownConceptNames(session.courseId));
+        const summary = await summarizeSession(passages, course, session.goal, this.model(), this.learner.knownConceptNames(session.courseId));
         this.db.saveSummary(sessionId, summary);
         this.learner.recordSessionConcepts(sessionId, session.courseId, summary);
         this.set(sessionId, { summary: "done" });
@@ -125,13 +139,13 @@ export class ReviewService {
         const kept: QuizDraft[] = [];
         let reason = "";
         for (let attempt = 0; attempt < 2 && kept.length < 5; attempt++) {
-          const quiz = await makeQuiz(passages, course, undefined, { askedQuestions, concepts });
+          const quiz = await makeQuiz(passages, course, this.model(), { askedQuestions, concepts });
           if (!quiz.ok) {
             reason = quiz.reason;
             break;
           }
           const fresh = quiz.questions.filter((q) => !kept.some((k) => k.question === q.question));
-          const checked = await verifyQuestions(fresh, passages);
+          const checked = await verifyQuestions(fresh, passages, this.model());
           kept.push(...checked.kept);
           console.log(`[review] quiz round ${attempt + 1}: ${fresh.length} written, ${checked.dropped.length} dropped by checking`);
         }
@@ -182,7 +196,7 @@ export class ReviewService {
       result = { correct: response === item.answer, answer: item.answer, explanation: "" };
     } else {
       const passage = item.chunkId ? this.db.getChunkText(item.chunkId) : "";
-      const m = await checkAnswer(item, passage, response);
+      const m = await checkAnswer(item, passage, response, this.model());
       result = { correct: m.correct, answer: item.answer, explanation: m.explanation };
     }
     // The answer is evidence for the learner model, and sets when the question comes back.

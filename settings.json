@@ -1,4 +1,8 @@
 {
+  "ai": {
+    "reviewModel": "qwen3.5:4b",
+    "askModel": "qwen3.5:4b"
+  },
   "capture": {
     "intervalSeconds": 5,
     "dwellSeconds": 8

@@ -464,7 +464,17 @@ function registerIpc() {
     reviews.ensure(String(id));
     openReview(String(id));
   });
-  ipcMain.handle("settings:get", () => ({ ...readAllSettings(), models: { tutor: "qwen3.5:4b", math: "glm-ocr:q8_0", memory: "embeddinggemma" }, aiProblem }));
+  ipcMain.handle("settings:get", async () => {
+    // Downloaded models that can tutor (not the math reader or the embedding model).
+    let installed: string[] = [];
+    try {
+      const tags = (await (await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) })).json()) as { models?: { name: string }[] };
+      installed = (tags.models ?? []).map((m) => m.name).filter((n) => !/glm-ocr|embed/i.test(n)).sort();
+    } catch {
+      /* Ollama not running */
+    }
+    return { ...readAllSettings(), models: { math: "glm-ocr:q8_0", memory: "embeddinggemma" }, installed, aiProblem };
+  });
   ipcMain.handle("settings:save", (_e, b: unknown) => saveAllSettings(b as SettingsBundle));
   ipcMain.handle("settings:open", () => openSettings());
   ipcMain.handle("learn:profile", () => learner.profile());
@@ -522,9 +532,15 @@ app.whenReady().then(() => {
   // STUDY_BUDDY_DB lets development checks use a throwaway database.
   db = new StudyDb(process.env.STUDY_BUDDY_DB ?? join(app.getPath("userData"), "study-buddy.db"));
   learner = new LearnerService(db, loadCourses);
-  reviews = new ReviewService(db, loadCourses, learner, (sessionId) => {
-    for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
-  });
+  reviews = new ReviewService(
+    db,
+    loadCourses,
+    learner,
+    (sessionId) => {
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
+    },
+    () => loadSettings(fromRoot("settings.json")).ai.reviewModel,
+  );
   asker = new AskController(loadSettings(fromRoot("settings.json")), {
     db,
     preload,
