@@ -71,8 +71,23 @@ export default function History() {
           ) : (
             groups.map(([courseId, list]) => (
               <section key={courseId} className="mt-3">
-                <h2 className="px-2 pb-1 text-[11px] font-bold tracking-widest text-accent uppercase">
+                <h2 className="group flex items-center justify-between px-2 pb-1 text-[11px] font-bold tracking-widest text-accent uppercase">
                   {courseName(courseId)}
+                  {state.status === "idle" || state.courseId !== courseId ? (
+                    <button
+                      onClick={() => {
+                        if (confirm(`Delete ALL ${courseName(courseId)} sessions, notes, quizzes, questions and learner model? This can't be undone.`)) {
+                          void window.api.deleteCourseData(courseId).then(() => {
+                            setSelectedId(null);
+                            void refresh();
+                          });
+                        }
+                      }}
+                      className="font-sans text-[11px] font-medium tracking-normal normal-case text-muted opacity-0 group-hover:opacity-100 hover:text-bad"
+                    >
+                      Delete all
+                    </button>
+                  ) : null}
                 </h2>
                 {list.map((s) => (
                   <button
@@ -103,19 +118,41 @@ export default function History() {
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="drag h-12 shrink-0" />
         {detail ? (
-          <SessionView s={detail} courseName={courseName(detail.courseId)} live={detail.id === liveId} onChanged={() => void refresh()} />
+          <SessionView
+            s={detail}
+            courseName={courseName(detail.courseId)}
+            live={detail.id === liveId}
+            onChanged={() => void refresh()}
+            onDeleted={() => {
+              setSelectedId(null);
+              void refresh();
+            }}
+          />
         ) : null}
       </main>
     </div>
   );
 }
 
-function SessionView({ s, courseName, live, onChanged }: { s: SessionDetail; courseName: string; live: boolean; onChanged: () => void }) {
+function SessionView(props: { s: SessionDetail; courseName: string; live: boolean; onChanged: () => void; onDeleted: () => void }) {
+  const { s, courseName, live, onChanged } = props;
   const started = new Date(s.startedAt);
   return (
     <div className="flex-1 overflow-y-auto px-8 pb-10">
       <div className="max-w-3xl">
       <header className="mb-6">
+        {!live ? (
+          <button
+            onClick={() => {
+              if (confirm("Delete this session — its notes, summary, quiz and questions? This can't be undone.")) {
+                void window.api.deleteSession(s.id).then(props.onDeleted);
+              }
+            }}
+            className="float-right mt-1 rounded-lg px-2 py-1 text-sm text-muted hover:bg-bad/10 hover:text-bad"
+          >
+            Delete session
+          </button>
+        ) : null}
         <h2 className="text-[26px] leading-tight font-bold tracking-tight">
           {courseName} · {dateFmt.format(started)}
         </h2>

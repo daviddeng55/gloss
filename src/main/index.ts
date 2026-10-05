@@ -44,6 +44,7 @@ let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
 let current: Current | null = null;
 let lastMenuKey = "";
+let aiProblem = ""; // shown in the menu when the local AI isn't available
 
 // ---------- helpers ----------
 
@@ -91,13 +92,20 @@ function updateTray() {
   const state = getState();
   tray.setTitle(state.status === "idle" ? "" : ` ${clock(state.activeMs)}`, { fontType: "monospacedDigit" });
   // Only rebuild the menu and icon when something other than the clock changed.
-  const key = state.status === "idle" ? "idle" : `${state.status}|${state.sessionId}`;
+  const key = (state.status === "idle" ? "idle" : `${state.status}|${state.sessionId}`) + `|${aiProblem}`;
   if (key === lastMenuKey) return;
   lastMenuKey = key;
   tray.setImage(icons[state.status]());
   tray.setToolTip(state.status === "idle" ? "Study Buddy" : `Study Buddy: ${state.status} ${state.courseName}`);
 
   const common: Electron.MenuItemConstructorOptions[] = [
+    ...(aiProblem
+      ? [
+          { type: "separator" as const },
+          { label: `⚠︎ ${aiProblem}`, enabled: false },
+          { label: "Open Ollama", click: () => void shell.openPath("/Applications/Ollama.app") },
+        ]
+      : []),
     { type: "separator" },
     { label: "History…", click: showHistory },
     { label: "How You Learn…", click: openLearn },
@@ -410,6 +418,17 @@ function registerIpc() {
   });
   ipcMain.handle("overlay:click", () => asker.overlayClicked());
   ipcMain.handle("chunks:delete", (_e, id: unknown) => db.deleteChunk(String(id)));
+  // Deleting is refused for the session that's recording right now.
+  ipcMain.handle("sessions:delete", (_e, id: unknown) => {
+    if (current?.sessionId === String(id)) return;
+    db.deleteSession(String(id));
+    broadcast();
+  });
+  ipcMain.handle("courses:delete-data", (_e, courseId: unknown) => {
+    if (current?.course.id === String(courseId)) return;
+    db.deleteCourseData(String(courseId));
+    broadcast();
+  });
   ipcMain.handle("review:redo", (_e, id: unknown) => {
     db.clearReview(String(id));
     reviews.forget(String(id));
@@ -453,6 +472,18 @@ app.whenReady().then(() => {
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
+
+  // Check the local AI every 30 s so the menu can say clearly when it isn't available.
+  const checkAiNow = async () => {
+    const r = await checkAi();
+    const msg = r.ok ? "" : r.error.code === "not-running" ? "Ollama isn't running — summaries and asking are off" : r.error.message;
+    if (msg !== aiProblem) {
+      aiProblem = msg;
+      updateTray();
+    }
+  };
+  void checkAiNow();
+  setInterval(() => void checkAiNow(), 30_000);
 
   // Tick once a second: menu bar clock; every 5 s save study time and flush waiting text.
   let ticks = 0;

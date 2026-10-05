@@ -487,6 +487,33 @@ export class StudyDb {
     }));
   }
 
+  /**
+   * Deletes a session and everything from it: notes, quiz, questions, and the learner-model evidence
+   * it produced. Concepts left with no notes and no evidence are removed too.
+   */
+  deleteSession(sessionId: string) {
+    this.db.exec("BEGIN");
+    this.db.prepare("DELETE FROM evidence WHERE session_id = ?").run(sessionId);
+    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId); // chunks, quiz, questions cascade
+    this.removeOrphanConcepts();
+    this.db.exec("COMMIT");
+  }
+
+  /** Deletes every session of a course and its learner model. */
+  deleteCourseData(courseId: string) {
+    this.db.exec("BEGIN");
+    const ids = (this.db.prepare("SELECT id FROM sessions WHERE course_id = ?").all(courseId) as Row[]).map((r) => r.id);
+    for (const id of ids) this.db.prepare("DELETE FROM evidence WHERE session_id = ?").run(id);
+    this.db.prepare("DELETE FROM sessions WHERE course_id = ?").run(courseId);
+    this.db.prepare("DELETE FROM concepts WHERE course_id = ?").run(courseId);
+    this.db.exec("COMMIT");
+  }
+
+  private removeOrphanConcepts() {
+    this.db.exec(`DELETE FROM concepts WHERE id NOT IN (SELECT concept_id FROM concept_chunks)
+                  AND id NOT IN (SELECT concept_id FROM evidence)`);
+  }
+
   /** Removes one passage (the user chose to; e.g. a page they didn't mean to study). */
   deleteChunk(id: string) {
     this.db.prepare("DELETE FROM chunks WHERE id = ?").run(id);

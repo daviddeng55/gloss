@@ -160,6 +160,8 @@ export interface StudyApi {
   openReview(sessionId: string): Promise<void>;
   redoReview(sessionId: string): Promise<void>;
   deletePassage(chunkId: string): Promise<void>;
+  deleteSession(sessionId: string): Promise<void>;
+  deleteCourseData(courseId: string): Promise<void>;
   onReview(callback: (sessionId: string) => void): () => void;
   closeWindow(): Promise<void>;
   askInfo(askId: string): Promise<AskInfo | null>;

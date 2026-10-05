@@ -71,3 +71,34 @@ test("database saves sessions and chunks and lists them newest first", () => {
     rmSync(dir, { recursive: true });
   }
 });
+
+test("deleting a session removes its notes, quiz, questions and learner evidence", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-"));
+  try {
+    const db = new StudyDb(join(dir, "t.db"));
+    const keep = db.createSession({ courseId: "math135", startedAt: "2026-10-01T20:00:00.000Z" });
+    const gone = db.createSession({ courseId: "math135", startedAt: "2026-10-02T20:00:00.000Z" });
+    const c1 = db.addChunk(keep, "math135", { text: "induction", sourceApp: "x", sourceTitle: "x", capturedAt: "2026-10-01T20:01:00.000Z" });
+    const c2 = db.addChunk(gone, "math135", { text: "sets", sourceApp: "x", sourceTitle: "x", capturedAt: "2026-10-02T20:01:00.000Z" });
+    const shared = db.upsertConcept("math135", "strong induction");
+    const only = db.upsertConcept("math135", "set equality");
+    db.linkConcept(shared, c1, keep);
+    db.linkConcept(shared, c2, gone);
+    db.linkConcept(only, c2, gone);
+    db.addEvidence(shared, { at: "2026-10-02T20:05:00.000Z", kind: "quiz", correct: false, sessionId: gone });
+    db.addEvidence(only, { at: "2026-10-02T20:05:00.000Z", kind: "covered", sessionId: gone });
+    db.saveQuiz(gone, "math135", [{ type: "short_answer", question: "Q", answer: "A", passageId: c2 }]);
+    db.addQuestion(gone, "math135", "what?", "x");
+    db.deleteSession(gone);
+    assert.deepEqual(db.listSessions().map((s) => s.id), [keep]);
+    const concepts = db.getConcepts("math135");
+    assert.deepEqual(concepts.map((c) => c.name), ["strong induction"], "concept only from the deleted session is gone");
+    assert.equal(concepts[0].evidence.length, 0, "evidence from the deleted session is gone");
+    db.deleteCourseData("math135");
+    assert.equal(db.listSessions().length, 0);
+    assert.equal(db.getConcepts().length, 0);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
