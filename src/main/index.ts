@@ -746,6 +746,8 @@ async function smokeAsk(dir: string) {
   const askId = await asker.smoke(path, dir, process.env.GLOSS_SMOKE_QUESTION);
   console.log("SMOKE ask window", askId ? "opened" : "NOT opened", JSON.stringify(askId ? { ...asker.info(askId), thumbnail: asker.info(askId)!.thumbnail.length + " chars" } : null));
   if (!askId) return app.quit();
+  await wait(400); // right after the popup opens: the spoken question should already show
+  writeFileSync(join(dir, "ask-early.png"), (await asker.windowFor(askId)!.webContents.capturePage()).toPNG());
   writeFileSync(join(dir, "sent.jpg"), Buffer.from(asker.info(askId)!.thumbnail.split(",")[1], "base64"));
   // The spoken question is asked automatically; wait for that answer.
   const t0 = Date.now();

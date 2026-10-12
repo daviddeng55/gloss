@@ -28,10 +28,15 @@ export default function Ask({ askId }: { askId: string }) {
   const [editing, setEditing] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
-  const busy = turns.some((t) => t.status === "streaming");
+  // Asked, but the AI hasn't started on it yet (it may be finishing something else first).
+  const waiting = asked !== "" && turns.length === 0;
+  const busy = waiting || turns.some((t) => t.status === "streaming");
 
   useEffect(() => {
-    void window.api.askInfo(askId).then(setInfo);
+    void window.api.askInfo(askId).then((i) => {
+      setInfo(i);
+      if (i?.spoken) setAsked((a) => a || i.spoken); // the question you said, before the answer starts
+    });
     const off = window.api.onAsk((e) => {
       if (e.askId !== askId) return;
       setTurns((ts) => {
@@ -47,6 +52,8 @@ export default function Ask({ askId }: { askId: string }) {
           if (e.type === "done") t.status = "done";
           if (e.type === "error") Object.assign(t, { status: "error", text: e.message });
           next[e.turn] = t;
+        } else if (e.type === "error") {
+          next[e.turn] = { level: "nudge", question: "", text: e.message, status: "error" }; // failed before starting
         }
         return next;
       });
@@ -155,6 +162,12 @@ export default function Ask({ askId }: { askId: string }) {
                 <span className="ml-2 font-sans text-xs text-accent opacity-0 group-hover:opacity-100">Edit</span>
               </button>
             )}
+            {waiting ? (
+              <p className="flex items-center gap-2 rounded-2xl border border-line bg-card p-4 text-muted shadow-sm">
+                <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                Waiting for the AI to finish what it's doing…
+              </p>
+            ) : null}
             {turns.map((t, i) => (
               <div key={i} className="rounded-2xl border border-line bg-card p-4 shadow-sm">
                 <p className="text-xs font-bold tracking-wide text-accent">

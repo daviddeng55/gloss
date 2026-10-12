@@ -125,6 +125,7 @@ export type AskInfo = {
   thumbnail: string; // data: URL of exactly what is sent
   circled: boolean; // false = area around the cursor
   sourceTitle: string;
+  spoken: string; // the question you said while circling (shown at once; asked automatically)
 };
 
 /** Messages to the circling overlay: points are relative to the overlay window. */

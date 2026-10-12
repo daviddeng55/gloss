@@ -6,6 +6,8 @@
 //   askAboutImage()     — Stage 4
 //   embed()             — Stage 5
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export type AiConfig = { baseUrl: string; model: string };
 export const DEFAULT_AI: AiConfig = { baseUrl: "http://localhost:11434", model: "qwen3.5:4b" };
 
@@ -33,8 +35,11 @@ type Message = { role: "system" | "user" | "assistant"; content: string; images?
 /** How long Ollama keeps a model in memory after its last use. */
 export const KEEP_ALIVE = "3m";
 
-let aiQueue: Promise<unknown> = Promise.resolve();
+type Job = { cfg: AiConfig; urgent: boolean; run: () => Promise<void> };
+const waiting: Job[] = [];
+let running = false;
 let currentModel: string | null = null;
+const urgentWork = new AsyncLocalStorage<boolean>();
 
 /** Unloads every loaded model except `keep` (Ollama frees a model when asked with keep_alive 0). */
 async function unloadOthers(baseUrl: string, keep: string) {
@@ -54,17 +59,39 @@ async function unloadOthers(baseUrl: string, keep: string) {
 /**
  * Runs AI work one request at a time, and never with two models in memory: switching to another
  * model first unloads the previous one. (A 16 GB fanless laptop can't comfortably hold both.)
+ * Work started inside `urgently` goes ahead of background work that is still waiting.
  */
 export function withModel<T>(cfg: AiConfig, work: () => Promise<T>): Promise<T> {
-  const run = aiQueue.then(async () => {
-    if (currentModel !== cfg.model) {
-      await unloadOthers(cfg.baseUrl, cfg.model).catch(() => {});
-      currentModel = cfg.model;
-    }
-    return work();
+  return new Promise<T>((resolve, reject) => {
+    const urgent = urgentWork.getStore() === true;
+    const job: Job = { cfg, urgent, run: () => Promise.resolve().then(work).then(resolve, reject) };
+    // Urgent work waits only for earlier urgent work (and whatever is already running).
+    const at = urgent ? waiting.findIndex((j) => !j.urgent) : -1;
+    waiting.splice(at < 0 ? waiting.length : at, 0, job);
+    void runWaiting();
   });
-  aiQueue = run.catch(() => {});
-  return run;
+}
+
+/**
+ * AI calls made inside `work` jump ahead of background jobs such as math re-reads. Used when you
+ * ask a question, so you aren't kept waiting behind the screen reader.
+ */
+export function urgently<T>(work: () => Promise<T>): Promise<T> {
+  return urgentWork.run(true, work);
+}
+
+async function runWaiting() {
+  if (running) return;
+  running = true;
+  while (waiting.length) {
+    const job = waiting.shift()!;
+    if (currentModel !== job.cfg.model) {
+      await unloadOthers(job.cfg.baseUrl, job.cfg.model).catch(() => {});
+      currentModel = job.cfg.model;
+    }
+    await job.run();
+  }
+  running = false;
 }
 
 /** One chat call. With `schema`, the model must reply with JSON matching it, which we parse. */

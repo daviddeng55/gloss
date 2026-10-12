@@ -3,7 +3,7 @@
 // cursor) is captured and a popup opens where you ask about it. Esc cancels.
 import { BrowserWindow, globalShortcut, Notification, screen } from "electron";
 import { randomUUID } from "node:crypto";
-import { askAboutImage, DEFAULT_AI, HINT_LEVELS, type HintLevel } from "../core/ai.ts";
+import { askAboutImage, DEFAULT_AI, HINT_LEVELS, type HintLevel, urgently } from "../core/ai.ts";
 import { cropFor, type Point } from "../core/crop.ts";
 import type { StudyDb } from "../core/db.ts";
 import type { VisionHelper } from "../core/helper.ts";
@@ -352,7 +352,7 @@ export class AskController {
       webPreferences: { preload: this.deps.preload, sandbox: true, contextIsolation: true },
     });
     this.asks.set(askId, {
-      info: { askId, courseName: s.courseName, thumbnail: `data:image/jpeg;base64,${jpeg}`, circled, sourceTitle },
+      info: { askId, courseName: s.courseName, thumbnail: `data:image/jpeg;base64,${jpeg}`, circled, sourceTitle, spoken },
       sessionId: s.sessionId,
       courseId: s.courseId,
       imageBase64: jpeg,
@@ -375,13 +375,16 @@ export class AskController {
     return this.asks.get(askId)?.info ?? null;
   }
 
-  /** Answers at a hint level, streaming to the popup. The first question is saved to the session. */
   /**
    * Answers at a hint level, streaming to the popup. "auto" (a new question) lets the learner model
    * choose where to start: what has helped you with this concept before, or a different approach
    * if you already asked about it today.
    */
-  async ask(askId: string, question: string, requested: HintLevel | "auto") {
+  ask(askId: string, question: string, requested: HintLevel | "auto"): Promise<void> {
+    return urgently(() => this.answer(askId, question, requested)); // ahead of background math re-reads
+  }
+
+  private async answer(askId: string, question: string, requested: HintLevel | "auto") {
     const a = this.asks.get(askId);
     if (!a || a.busy) return;
     const q = question.trim().slice(0, 2000);

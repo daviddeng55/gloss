@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { alignParagraphs, ensureMathDelimiters, fixLatexEscapes, splitReading, tooThin, validateQuestions } from "./ai.ts";
+import { alignParagraphs, ensureMathDelimiters, fixLatexEscapes, splitReading, tooThin, urgently, validateQuestions, withModel } from "./ai.ts";
 import { looksMathy, unionBox } from "./capture.ts";
 import { StudyDb } from "./db.ts";
 
@@ -143,4 +143,17 @@ test("quiz answers update the score and spaced review", () => {
   } finally {
     rmSync(dir, { recursive: true });
   }
+});
+
+test("a question you ask goes ahead of background AI work that is still waiting", async () => {
+  const cfg = { baseUrl: "http://127.0.0.1:9", model: "test" }; // nothing listens there: unloading is skipped
+  const order: string[] = [];
+  let release: (() => void) | undefined;
+  const running = withModel(cfg, () => new Promise<void>((r) => (release = r)).then(() => void order.push("running")));
+  const background = [1, 2].map((n) => withModel(cfg, async () => void order.push(`math re-read ${n}`)));
+  const asked = urgently(() => withModel(cfg, async () => void order.push("question")));
+  while (!release) await new Promise((r) => setTimeout(r, 5)); // the first job has started
+  release();
+  await Promise.all([running, ...background, asked]);
+  assert.deepEqual(order, ["running", "question", "math re-read 1", "math re-read 2"]);
 });
