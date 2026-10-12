@@ -1,92 +1,161 @@
 # Study Buddy
 
-A study partner on my Mac. See `PRD.md` for the plan.
+A study partner that lives in your Mac's menu bar. Start a session and it reads what's on your screen
+while you study. Point at anything and ask about it. When you finish, it writes a summary and a short
+quiz on what you covered. Everything runs **on your Mac**, using local AI models through
+[Ollama](https://ollama.com). Nothing is sent online.
 
-## Rules for me
+I built this to learn, as a beginner, for my own university courses. It works, but it's a personal
+project, not a polished product. See [Known limitations](#known-limitations).
+
+<!-- Screenshots: add images to docs/screenshots/ and link them here, e.g.
+![Start a session](docs/screenshots/start.png)
+![End-of-session review](docs/screenshots/review.png)
+![Circle and ask](docs/screenshots/ask.png)
+![How You Learn](docs/screenshots/learn.png)
+-->
+_Screenshots coming soon._
+
+## What it does
+
+- **Study sessions.** Click the menu bar icon, pick a course and start. Every few seconds Study Buddy
+  checks the window you're working in. If the window has changed, it reads the text with macOS's
+  built-in text recognition, then throws the screenshot away. Only text is kept. Nothing is
+  captured outside a session.
+- **Summary and quiz.** When you end a session, a review window shows a summary of what you covered,
+  then a quiz of 5–8 questions (multiple choice and short answer) built only from your notes. Every
+  point links back to the notes it came from.
+- **Circle and ask.** During a session, press **Option+A**, circle something on screen, type or say
+  your question, and press Option+A again. The answer uses your course material and starts with the
+  smallest helpful hint. It never writes complete answers to graded work.
+- **Math reading.** For courses marked as math, formulas are re-read by a small document-reading AI
+  model, because Apple's text recognition garbles symbols.
+- **Adaptive learning.** It keeps a model of what you know in each course: concepts, how well you know
+  each one (this fades if you don't practise) and which kind of help works for you. It uses this to aim
+  quizzes at weak spots, warm you up with questions due for review, and pitch answers at the right
+  level. You can see, correct and delete all of it under **How You Learn…**.
+- **Privacy controls.** Apps and sites on a never-record list (password managers, banking, messaging,
+  email, private windows) are never read. Card numbers, SINs and text near "password" are redacted
+  before anything is saved. You can delete a session, or everything for a course, from History.
+
+## Requirements
+
+- A Mac with **Apple Silicon** (M1 or newer) and **16 GB of memory or more**. With 8 GB the AI models
+  won't fit alongside your other apps.
+- **macOS 26 (Tahoe)** or newer. It's developed and tested on macOS 26 only.
+- About **6 GB of free disk space** for the AI models.
+- **Node.js 26** or newer (it runs TypeScript directly): `brew install node` or [nodejs.org](https://nodejs.org).
+- **Xcode Command Line Tools** (to build the small Swift helpers): `xcode-select --install`.
+- **[Ollama](https://ollama.com)** with these models:
+
+  | Model | Size | Used for | Needed? |
+  |---|---|---|---|
+  | `qwen3.5:4b` | 3.4 GB | summaries, quizzes, marking, answering questions | **required** |
+  | `glm-ocr:q8_0` | 1.6 GB | reading math symbols correctly | recommended for math courses |
+  | `embeddinggemma` | 621 MB | finding related notes from earlier sessions by meaning | optional (falls back to keyword search) |
+
+## Setup
+
+```sh
+git clone https://github.com/daviddeng55/study-buddy.git
+cd study-buddy
+npm install
+npm run build:helper      # builds the screen-reading and voice helpers into bin/
+
+ollama pull qwen3.5:4b
+ollama pull glm-ocr:q8_0      # optional, for math
+ollama pull embeddinggemma    # optional
+```
+
+Make sure Ollama is running (its llama icon is in the menu bar), then start Study Buddy:
+
+```sh
+npm run dev               # keep this terminal open while you use the app
+```
+
+A book icon appears in the menu bar. Click it, then **Start Session…**.
+
+**Your courses** are in `courses.json`. Edit it to add your own. Set `"math": true` on courses with
+formulas to turn on math reading. You can also change courses and most other options in
+**Settings…** (Command+,).
+
+## macOS permissions
+
+macOS asks for each permission the first time it's needed. If you miss a prompt, open
+**System Settings → Privacy & Security** and turn it on there.
+
+| Permission | Why | Where to turn it on |
+|---|---|---|
+| **Screen Recording** | to read the text on screen during a session | Privacy & Security → **Screen & System Audio Recording**. Turn on the app you launched Study Buddy from (e.g. **Terminal** or **Visual Studio Code**), because an app started from a terminal uses that terminal's permission. Quit and reopen the terminal afterwards. |
+| **Microphone** | to hear your question when asking by voice | Privacy & Security → **Microphone** → **Study Buddy Voice** |
+| **Speech Recognition** | to turn your spoken question into text, on your Mac | Privacy & Security → **Speech Recognition** → **Study Buddy Voice** |
+| **Notifications** (optional) | quiet "want help?" offers when you seem stuck | System Settings → **Notifications** → your terminal app |
+
+The microphone is on only between the two presses of the ask shortcut. Speech is recognised
+on-device. If you don't want voice at all, turn it off in Settings and skip those two permissions.
+Study Buddy doesn't need Accessibility or Input Monitoring.
+
+## Using it
+
+1. **Start Session…** → pick a course → optionally type a goal → **Start**. The icon turns red and
+   shows your study time. **Pause/Resume** is in the menu; sessions pause while the Mac is locked.
+2. Study as usual. A window or tab is read only after it's been in front for 8 seconds, so quick
+   switches are ignored.
+3. **Option+A** → circle → ask. **Esc** cancels.
+4. **End Session** → the review window opens with the summary (about 1 minute) and then the quiz
+   (about 2 more minutes).
+5. **History…** reopens past reviews and lets you delete passages, sessions or whole courses.
+   **How You Learn…** shows what the app thinks you know.
+
+Your data is stored in `~/Library/Application Support/Study Buddy/`. Delete that folder to erase
+everything.
+
+## Known limitations
+
+- **Slow on base laptops.** On a fanless MacBook Air with 16 GB, the main model writes about 16 words
+  per second: a summary takes about a minute and a quiz about two more. The laptop gets warm during
+  reviews. Answers to questions take 5–15 seconds.
+- **Math symbols can be misread.** Apple's text recognition garbles Σ, Greek letters, √, exponents and
+  fractions. The math-reading model fixes most of this, but not all of it, and notes from before it
+  ran stay garbled (screenshots aren't kept, so they can't be re-read).
+- **A small model makes mistakes.** Quiz questions are checked against your notes and unsupported ones
+  are dropped, but a wrong answer key still slips through sometimes. Concept names in How You Learn
+  can be odd or duplicated (use "Forget this concept" to clean them up).
+- **The adaptive part needs data.** After one or two sessions it's mostly guessing; it gets useful
+  after about a week of sessions with quizzes.
+- **It only knows what it saw.** Lectures, paper homework and anything outside a session are
+  invisible to it. Tell it with "I know this" in How You Learn.
+- **Private windows** are only skipped when the window title says so (Safari's often doesn't).
+- **No packaged app yet.** You run it from a terminal with `npm run dev`.
+- Built and tested on one Mac (M5 MacBook Air, macOS 26). Other setups may need fixes.
+
+## Rules for using it
 - Never start a session during a test, quiz or exam.
 - Check each course's rules about AI tools and follow them.
 
-## The menu bar app (Stage 2)
+## For developers
 
 ```sh
-npm install              # once
-npm run build:helper     # once, and after changing helper/vision-helper.swift
-npm run dev              # starts Study Buddy in the menu bar (keep this terminal open)
+npm run typecheck   # type checks
+npm test            # unit tests
+npm run build       # production build into out/
 ```
 
-Click the book icon in the menu bar → **Start Session…** → pick a course, optionally type a goal → **Start**.
-While recording, the icon turns red and shows your study time. The menu has **Pause/Resume**, **End Session**
-and **History…**. Sessions pause automatically while the screen is locked or the Mac sleeps.
+There's also a terminal-only capture command for testing text recognition:
+`npm run session -- --course math135 --minutes 10` (transcripts go to `sessions/`, which is
+gitignored), and `npm run ocr-test -- path/to/image.png`.
 
-When you **End Session**, a review window opens: first a summary of what you covered (about a minute),
-then a quiz of about 5 questions (about 2 more minutes). Multiple choice is marked instantly; short answers
-are marked by the AI against your notes. Every summary point and question links to the notes it came from.
-Reopen any session's review from History.
+Project layout:
+- `src/core`: capture loop, text cleaning, chunking, database, AI calls, learner model
+- `src/main`: Electron main process (menu bar, sessions, windows, circle-and-ask)
+- `src/preload`: the safe bridge between windows and the main process
+- `src/renderer`: the windows (React + Tailwind)
+- `src/cli`: terminal commands
+- `helper/`: Swift helpers for screen capture + text recognition and for on-device speech
 
-For MATH courses (`"math": true` in `courses.json`), new formulas on screen are also re-read by the AI
-model from a cropped screenshot (at most every 45 s), which fixes symbols Apple's text recognition misreads.
+`PRD.md` is the original plan, and `CLAUDE.md` has the build notes. The app was built step by step with
+[Claude Code](https://claude.com/claude-code).
 
-Sessions and their text are saved in `~/Library/Application Support/Study Buddy/study-buddy.db`.
+## License
 
-### Circle and ask (during a session)
-Press **Option+A**, circle what you're asking about (and say your question out loud), then press
-**Option+A** again or click. A popup shows exactly what was sent and the answer, with buttons for a
-Nudge, an explanation of the concept, or a worked example of a similar problem. **Esc** cancels.
-The microphone is on only between the two presses; speech is turned into text on your Mac
-("Study Buddy Voice" needs Microphone and Speech Recognition permission). Change the shortcut or turn
-voice off in `settings.json`.
-
-### How you learn (adaptive learning)
-Study Buddy keeps a learner model of each course: the concepts you've studied, how well you know each
-(it fades if you don't practise), and which kind of help works for you. It uses it to pitch answers,
-aim quizzes at weak spots, warm you up with questions due for review, point out earlier topics today's
-material builds on, and offer help when you seem stuck. See and correct it under **How You Learn…**
-in the menu bar. Turn off the "stuck?" offers with `"offerHelpWhenStuck": false` in `settings.json`.
-
-### AI (Ollama)
-The AI runs on your Mac through [Ollama](https://ollama.com) — nothing is sent online.
-Ollama must be running (it lives in the menu bar) with the model downloaded: `ollama pull qwen3.5:4b`.
-Courses come from `courses.json` (edit it to add or rename courses).
-
-Screen Recording: started from a terminal, the app uses that terminal app's permission (e.g. VS Code).
-If it asks for permission, follow the steps in the popup.
-
-## Stage 1 — session capture (terminal)
-
-```sh
-npm install              # once
-npm run build:helper     # once, and after changing helper/vision-helper.swift
-npm run session -- --course math135 --minutes 10 --goal "induction practice"
-```
-
-Press Ctrl+C to end early. Transcripts are saved to `sessions/<course>/` (`.md` to read, `.jsonl` as data).
-Screenshots are captured in memory, read, and discarded; they are never written to disk.
-
-Options: `--interval 5` (seconds), `--mode window|display`, `--engine document|lines`,
-`--language-correction`, `--threshold 0.02` (how much of the screen must change before re-reading).
-
-Use the default `window` mode: it captures only the window you're working in. `display` mode captures
-the whole screen (minus blocked windows) and picks up much more unrelated text.
-
-What is never captured:
-- Apps and page titles in `never-record.json` (password managers, Messages, Mail/Gmail, LinkedIn,
-  chat apps, the Claude and ChatGPT apps, banking). Edit it to add or remove entries.
-- This project's own windows: VS Code or a terminal whose title mentions this folder. VS Code open on
-  another folder (e.g. CS 135 work) is still recorded.
-- Private/incognito windows are only caught when the title says so (Safari's usually doesn't).
-
-Check how well text recognition reads a page (e.g. math notes):
-
-```sh
-npm run ocr-test -- ~/Desktop/notes.png
-```
-
-Other: `npm run typecheck`, `npm test`, `npm run build`.
-
-## Project layout
-- `src/core` — capture loop, text cleaning, chunking, database (shared by the app and the terminal command)
-- `src/main` — the app's main process (menu bar, sessions, windows)
-- `src/preload` — the safe bridge between windows and the main process
-- `src/renderer` — the windows (React + Tailwind): start popup and History
-- `src/cli` — terminal commands (`npm run session`, `npm run ocr-test`)
-- `helper/vision-helper.swift` — screen capture + Apple text recognition
+[MIT](LICENSE)

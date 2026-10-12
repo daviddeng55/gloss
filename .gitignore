@@ -1,10 +1,30 @@
 node_modules/
+.DS_Store
+
+# Build output
 dist/
+out/
 bin/
+release/
+
+# Secrets
 .env
 .env.*
-*.png
+
+# Personal data: session transcripts, databases, screenshots, recordings, logs
 sessions/
-.DS_Store
-out/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.png
 !resources/*.png
+!docs/screenshots/*.png
+*.mov
+*.mp4
+*.m4a
+*.wav
+*.caf
+*.log
