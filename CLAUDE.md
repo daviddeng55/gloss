@@ -53,4 +53,4 @@ I'm a beginner building this to learn.
 - 2026-10-11: User tested voice for real: works well (Mic + Speech granted for Gloss Voice). First normal start copied all 9 old sessions into Gloss/gloss.db.
 - 2026-10-11: User deleted the leftovers (backup branch, old voice binary, old Study Buddy data folder).
 - 2026-10-11: **Published** at https://github.com/daviddeng55/gloss (public, MIT, remote `origin`). Verified: no sessions/DBs/secrets in the repo.
-- Next: add screenshots (docs/screenshots/, un-comment the README lines) and a repo description. Then to the README. Then package as Gloss.app (ask before installing electron-builder). User still to test Stage 5 in real sessions.
+- Next: add screenshots (docs/screenshots/, un-comment the README lines) and a repo description. Then package as Gloss.app (ask before installing electron-builder). User still to test Stage 5 in real sessions.
