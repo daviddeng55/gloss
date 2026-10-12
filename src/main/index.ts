@@ -1,7 +1,8 @@
 // Main process: the menu bar icon, the capture session, the database, and the windows.
 // (Electron's "main process" is the hidden Node program; windows are separate "renderer" processes.)
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, screen, shell, Tray } from "electron";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
 import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
@@ -98,7 +99,7 @@ function updateTray() {
   if (key === lastMenuKey) return;
   lastMenuKey = key;
   tray.setImage(icons[state.status]());
-  tray.setToolTip(state.status === "idle" ? "Study Buddy" : `Study Buddy: ${state.status} ${state.courseName}`);
+  tray.setToolTip(state.status === "idle" ? "Gloss" : `Gloss: ${state.status} ${state.courseName}`);
 
   const common: Electron.MenuItemConstructorOptions[] = [
     ...(aiProblem
@@ -113,7 +114,7 @@ function updateTray() {
     { label: "How You Learn…", click: openLearn },
     { label: "Settings…", accelerator: "Command+,", click: openSettings },
     { type: "separator" },
-    { label: "Quit Study Buddy", accelerator: "Command+Q", click: () => app.quit() },
+    { label: "Quit Gloss", accelerator: "Command+Q", click: () => app.quit() },
   ];
   const items: Electron.MenuItemConstructorOptions[] =
     state.status === "idle"
@@ -147,7 +148,7 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
       return {
         ok: false,
         reason: "permission",
-        message: "Study Buddy needs Screen Recording permission to read your screen during sessions.",
+        message: "Gloss needs Screen Recording permission to read your screen during sessions.",
       };
     }
   } catch (err) {
@@ -173,7 +174,7 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     mathPass: mathReady?.ok ? (img, paragraphs, which) => readMathParagraphs(img, paragraphs, which) : undefined,
     neverRecord: loadNeverRecord(fromRoot("never-record.json")),
     projectName: basename(ROOT),
-    ownPids: [process.pid], // never capture Study Buddy's own windows
+    ownPids: [process.pid], // never capture Gloss's own windows
     settings: {
       ...DEFAULT_SETTINGS,
       intervalMs: settings.capture.intervalSeconds * 1000,
@@ -183,7 +184,7 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     onObserve: (o) => {
       // Noticing when you might be stuck: a quiet offer of help, never an interruption.
       const hint = confusion?.observe({ at: Date.now(), ...o });
-      if (hint) new Notification({ title: "Study Buddy", body: `${hint} (${shortcutText()})`, silent: true }).show();
+      if (hint) new Notification({ title: "Gloss", body: `${hint} (${shortcutText()})`, silent: true }).show();
     },
     onLog: (line) => console.log(`[capture] ${line}`),
   });
@@ -201,11 +202,11 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
       isPaused: () => current?.loop.status === "paused",
     },
     // Development checks never trigger the real microphone/speech permission prompts.
-    ((st) => (process.env.STUDY_BUDDY_SMOKE_ASK ? { ...st, ask: { ...st.ask, voice: false } } : st))(loadSettings(fromRoot("settings.json"))),
+    ((st) => (process.env.GLOSS_SMOKE_ASK ? { ...st, ask: { ...st.ask, voice: false } } : st))(loadSettings(fromRoot("settings.json"))),
   );
   if (askProblem) console.log(`[ask] ${askProblem}`);
   // Warm-up: questions you're due to review in this course (wrong ones first).
-  if (!process.env.STUDY_BUDDY_SMOKE_ASK && !process.env.STUDY_BUDDY_SMOKE_SESSION && learner.warmup(sessionId, courseId)) openWarmup(sessionId);
+  if (!process.env.GLOSS_SMOKE_ASK && !process.env.GLOSS_SMOKE_SESSION && learner.warmup(sessionId, courseId)) openWarmup(sessionId);
   popup?.hide();
   broadcast();
   return { ok: true };
@@ -310,7 +311,7 @@ function showHistory() {
       minWidth: 640,
       minHeight: 420,
       show: false,
-      title: "Study Buddy — History",
+      title: "Gloss — History",
       titleBarStyle: "hiddenInset",
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#ffffff",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
@@ -333,7 +334,7 @@ function openLearn() {
       minWidth: 600,
       minHeight: 420,
       show: false,
-      title: "Study Buddy — How You Learn",
+      title: "Gloss — How You Learn",
       titleBarStyle: "hiddenInset",
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
@@ -356,7 +357,7 @@ function openSettings() {
       minWidth: 560,
       minHeight: 480,
       show: false,
-      title: "Study Buddy — Settings",
+      title: "Gloss — Settings",
       titleBarStyle: "hiddenInset",
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
@@ -412,7 +413,7 @@ function openWarmup(sessionId: string) {
     x: area.x + area.width - 540,
     y: area.y + 20,
     show: false,
-    title: "Study Buddy — Warm-up",
+    title: "Gloss — Warm-up",
     titleBarStyle: "hiddenInset",
     alwaysOnTop: true,
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
@@ -431,7 +432,7 @@ function openReview(sessionId: string) {
       minWidth: 520,
       minHeight: 480,
       show: false,
-      title: "Study Buddy — Review",
+      title: "Gloss — Review",
       titleBarStyle: "hiddenInset",
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#ffffff",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
@@ -523,14 +524,30 @@ function registerIpc() {
 
 // ---------- app lifecycle ----------
 
+/**
+ * The database in the app's data folder. The app used to be called Study Buddy: the first time Gloss
+ * starts, it copies the old database over. The old folder is left untouched.
+ */
+function userDbPath(): string {
+  const path = join(app.getPath("userData"), "gloss.db");
+  const old = join(app.getPath("appData"), "Study Buddy", "study-buddy.db");
+  if (!existsSync(path) && existsSync(old)) {
+    mkdirSync(dirname(path), { recursive: true });
+    const src = new DatabaseSync(old, { readOnly: true });
+    src.exec(`VACUUM INTO '${path.replaceAll("'", "''")}'`); // a consistent copy, even mid-write
+    src.close();
+  }
+  return path;
+}
+
 // One copy at a time, except development checks, which use a throwaway database and data folder.
-if (process.env.STUDY_BUDDY_DB) app.setPath("userData", join(dirname(process.env.STUDY_BUDDY_DB), "userdata"));
+if (process.env.GLOSS_DB) app.setPath("userData", join(dirname(process.env.GLOSS_DB), "userdata"));
 else if (!app.requestSingleInstanceLock()) app.quit();
 
 app.whenReady().then(() => {
   app.dock?.hide(); // menu bar only, no Dock icon
-  // STUDY_BUDDY_DB lets development checks use a throwaway database.
-  db = new StudyDb(process.env.STUDY_BUDDY_DB ?? join(app.getPath("userData"), "study-buddy.db"));
+  // GLOSS_DB lets development checks use a throwaway database.
+  db = new StudyDb(process.env.GLOSS_DB ?? userDbPath());
   learner = new LearnerService(db, loadCourses);
   reviews = new ReviewService(
     db,
@@ -545,7 +562,7 @@ app.whenReady().then(() => {
     db,
     preload,
     load,
-    voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Study Buddy Voice") },
+    voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Gloss Voice") },
     learner,
   });
   // Older notes get embeddings too, once the embedding model is there (quietly, in the background).
@@ -592,20 +609,20 @@ app.whenReady().then(() => {
   powerMonitor.on("unlock-screen", autoResume);
   powerMonitor.on("resume", autoResume);
 
-  if (process.env.STUDY_BUDDY_SMOKE) void smokeTest(process.env.STUDY_BUDDY_SMOKE);
-  if (process.env.STUDY_BUDDY_SMOKE_SETTINGS) void (async () => {
+  if (process.env.GLOSS_SMOKE) void smokeTest(process.env.GLOSS_SMOKE);
+  if (process.env.GLOSS_SMOKE_SETTINGS) void (async () => {
     openSettings();
     await new Promise((r) => setTimeout(r, 2500));
     const { writeFileSync: w } = await import("node:fs");
-    w(join(process.env.STUDY_BUDDY_SMOKE_SETTINGS!, "settings.png"), (await settingsWin!.webContents.capturePage()).toPNG());
+    w(join(process.env.GLOSS_SMOKE_SETTINGS!, "settings.png"), (await settingsWin!.webContents.capturePage()).toPNG());
     app.quit();
   })();
-  if (process.env.STUDY_BUDDY_SMOKE_SESSION) void smokeSession(Number(process.env.STUDY_BUDDY_SMOKE_SESSION));
-  if (process.env.STUDY_BUDDY_SMOKE_REVIEW) void smokeReview(process.env.STUDY_BUDDY_SMOKE_REVIEW);
-  if (process.env.STUDY_BUDDY_SMOKE_ASK) void smokeAsk(process.env.STUDY_BUDDY_SMOKE_ASK);
-  if (process.env.STUDY_BUDDY_SMOKE_LEARN) void smokeLearn(process.env.STUDY_BUDDY_SMOKE_LEARN);
+  if (process.env.GLOSS_SMOKE_SESSION) void smokeSession(Number(process.env.GLOSS_SMOKE_SESSION));
+  if (process.env.GLOSS_SMOKE_REVIEW) void smokeReview(process.env.GLOSS_SMOKE_REVIEW);
+  if (process.env.GLOSS_SMOKE_ASK) void smokeAsk(process.env.GLOSS_SMOKE_ASK);
+  if (process.env.GLOSS_SMOKE_LEARN) void smokeLearn(process.env.GLOSS_SMOKE_LEARN);
   // Development checks: show errors from every window in the terminal.
-  if (process.env.STUDY_BUDDY_DB) {
+  if (process.env.GLOSS_DB) {
     app.on("web-contents-created", (_e, wc) =>
       wc.on("console-message", (ev) => ev.level === "error" && console.log("SMOKE window error:", ev.message.slice(0, 120), "in", wc.getURL().split("#").pop())),
     );
@@ -709,7 +726,7 @@ async function smokeReview(dir: string) {
 async function smokeAsk(dir: string) {
   const { writeFileSync } = await import("node:fs");
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const course = process.env.STUDY_BUDDY_SMOKE_COURSE ?? "cs135";
+  const course = process.env.GLOSS_SMOKE_COURSE ?? "cs135";
   const res = await startSession(course, "ask smoke test");
   if (!res.ok) {
     console.log("SMOKE start failed", res.message);
@@ -726,7 +743,7 @@ async function smokeAsk(dir: string) {
     writeFileSync(join(dir, "warmup.png"), (await warmupWin!.webContents.capturePage()).toPNG());
     warmupWin?.close();
   }
-  const askId = await asker.smoke(path, dir, process.env.STUDY_BUDDY_SMOKE_QUESTION);
+  const askId = await asker.smoke(path, dir, process.env.GLOSS_SMOKE_QUESTION);
   console.log("SMOKE ask window", askId ? "opened" : "NOT opened", JSON.stringify(askId ? { ...asker.info(askId), thumbnail: asker.info(askId)!.thumbnail.length + " chars" } : null));
   if (!askId) return app.quit();
   writeFileSync(join(dir, "sent.jpg"), Buffer.from(asker.info(askId)!.thumbnail.split(",")[1], "base64"));

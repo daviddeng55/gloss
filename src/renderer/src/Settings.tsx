@@ -1,5 +1,5 @@
 // Settings: courses, the ask shortcut and voice, capture timing, learning, never-record list, AI models,
-// and the rules for using Study Buddy. Saved to settings.json / courses.json / never-record.json.
+// and the rules for using Gloss. Saved to settings.json / courses.json / never-record.json.
 import { useEffect, useState, type ReactNode } from "react";
 import type { SettingsView } from "../../shared/types.ts";
 
@@ -110,7 +110,7 @@ export default function Settings() {
         <div className="mx-auto max-w-2xl">
           <h1 className="mb-6 text-[28px] leading-tight font-bold tracking-tight">Settings</h1>
 
-          <Section title="Rules for me" note="Study Buddy is a study partner, not a way around the rules.">
+          <Section title="Rules for me" note="Gloss is a study partner, not a way around the rules.">
             <ul className="list-disc space-y-1 pl-5 font-serif text-[16px]">
               <li>Never start a session during a test, quiz or exam.</li>
               <li>Check each course's rules about AI tools, and follow them.</li>

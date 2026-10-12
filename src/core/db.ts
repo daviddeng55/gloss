@@ -1,5 +1,5 @@
 // The local SQLite database (Node's built-in node:sqlite, which Electron includes).
-// Lives in the app's data folder: ~/Library/Application Support/Study Buddy/study-buddy.db
+// Lives in the app's data folder: ~/Library/Application Support/Gloss/gloss.db
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { ChunkRow, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";

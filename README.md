@@ -1,4 +1,6 @@
-# Study Buddy
+# Gloss
+
+> *gloss* (noun): a short note written beside a hard passage to explain it.
 
 A study partner that lives in your Mac's menu bar. Start a session and it reads what's on your screen
 while you study. Point at anything and ask about it. When you finish, it writes a summary and a short
@@ -18,7 +20,7 @@ _Screenshots coming soon._
 
 ## What it does
 
-- **Study sessions.** Click the menu bar icon, pick a course and start. Every few seconds Study Buddy
+- **Study sessions.** Click the menu bar icon, pick a course and start. Every few seconds Gloss
   checks the window you're working in. If the window has changed, it reads the text with macOS's
   built-in text recognition, then throws the screenshot away. Only text is kept. Nothing is
   captured outside a session.
@@ -57,8 +59,8 @@ _Screenshots coming soon._
 ## Setup
 
 ```sh
-git clone https://github.com/daviddeng55/study-buddy.git
-cd study-buddy
+git clone https://github.com/daviddeng55/gloss.git
+cd gloss
 npm install
 npm run build:helper      # builds the screen-reading and voice helpers into bin/
 
@@ -67,7 +69,7 @@ ollama pull glm-ocr:q8_0      # optional, for math
 ollama pull embeddinggemma    # optional
 ```
 
-Make sure Ollama is running (its llama icon is in the menu bar), then start Study Buddy:
+Make sure Ollama is running (its llama icon is in the menu bar), then start Gloss:
 
 ```sh
 npm run dev               # keep this terminal open while you use the app
@@ -86,14 +88,14 @@ macOS asks for each permission the first time it's needed. If you miss a prompt,
 
 | Permission | Why | Where to turn it on |
 |---|---|---|
-| **Screen Recording** | to read the text on screen during a session | Privacy & Security → **Screen & System Audio Recording**. Turn on the app you launched Study Buddy from (e.g. **Terminal** or **Visual Studio Code**), because an app started from a terminal uses that terminal's permission. Quit and reopen the terminal afterwards. |
-| **Microphone** | to hear your question when asking by voice | Privacy & Security → **Microphone** → **Study Buddy Voice** |
-| **Speech Recognition** | to turn your spoken question into text, on your Mac | Privacy & Security → **Speech Recognition** → **Study Buddy Voice** |
+| **Screen Recording** | to read the text on screen during a session | Privacy & Security → **Screen & System Audio Recording**. Turn on the app you launched Gloss from (e.g. **Terminal** or **Visual Studio Code**), because an app started from a terminal uses that terminal's permission. Quit and reopen the terminal afterwards. |
+| **Microphone** | to hear your question when asking by voice | Privacy & Security → **Microphone** → **Gloss Voice** |
+| **Speech Recognition** | to turn your spoken question into text, on your Mac | Privacy & Security → **Speech Recognition** → **Gloss Voice** |
 | **Notifications** (optional) | quiet "want help?" offers when you seem stuck | System Settings → **Notifications** → your terminal app |
 
 The microphone is on only between the two presses of the ask shortcut. Speech is recognised
 on-device. If you don't want voice at all, turn it off in Settings and skip those two permissions.
-Study Buddy doesn't need Accessibility or Input Monitoring.
+Gloss doesn't need Accessibility or Input Monitoring.
 
 ## Using it
 
@@ -107,7 +109,7 @@ Study Buddy doesn't need Accessibility or Input Monitoring.
 5. **History…** reopens past reviews and lets you delete passages, sessions or whole courses.
    **How You Learn…** shows what the app thinks you know.
 
-Your data is stored in `~/Library/Application Support/Study Buddy/`. Delete that folder to erase
+Your data is stored in `~/Library/Application Support/Gloss/`. Delete that folder to erase
 everything.
 
 ## Known limitations

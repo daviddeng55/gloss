@@ -1,5 +1,5 @@
-// Talks to "Study Buddy Voice" (helper/voice.swift): on-device speech-to-text. It's started through
-// `vision-helper --disclaim` so macOS asks permission for Study Buddy Voice itself.
+// Talks to "Gloss Voice" (helper/voice.swift): on-device speech-to-text. It's started through
+// `vision-helper --disclaim` so macOS asks permission for Gloss Voice itself.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -16,7 +16,7 @@ export class VoiceHelper {
   private listeners = new Set<(e: VoiceEvent) => void>();
 
   constructor(paths: { visionHelper: string; voice: string }) {
-    if (!existsSync(paths.voice)) throw new Error("Study Buddy Voice isn't built. Run: npm run build:helper");
+    if (!existsSync(paths.voice)) throw new Error("Gloss Voice isn't built. Run: npm run build:helper");
     this.proc = spawn(paths.visionHelper, ["--disclaim", paths.voice]);
     createInterface({ input: this.proc.stdout }).on("line", (line) => {
       let msg: any;
@@ -37,7 +37,7 @@ export class VoiceHelper {
     });
     this.proc.stderr.on("data", (d) => process.stderr.write(`[voice] ${d}`));
     this.proc.on("exit", () => {
-      for (const p of this.pending.values()) p.reject(new Error("Study Buddy Voice stopped"));
+      for (const p of this.pending.values()) p.reject(new Error("Gloss Voice stopped"));
       this.pending.clear();
     });
   }
@@ -47,7 +47,7 @@ export class VoiceHelper {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Study Buddy Voice didn't answer "${cmd}"`));
+        reject(new Error(`Gloss Voice didn't answer "${cmd}"`));
       }, timeoutMs);
       const done = (fn: (v: any) => void) => (v: any) => {
         clearTimeout(timer);
@@ -88,6 +88,6 @@ export class VoiceHelper {
   }
 
   close() {
-    this.proc.stdin.end(); // Study Buddy Voice quits when its input closes
+    this.proc.stdin.end(); // Gloss Voice quits when its input closes
   }
 }

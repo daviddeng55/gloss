@@ -24,7 +24,7 @@ import Vision
 
 // MARK: - JSON in/out
 
-// MARK: - Launching Study Buddy Voice as its own app
+// MARK: - Launching Gloss Voice as its own app
 
 // `vision-helper --disclaim <program> [args]` starts <program> so that macOS treats it as responsible
 // for itself (rather than VS Code or Terminal). Then macOS asks permission for that program by name,
@@ -346,7 +346,7 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
 
         case "snap":
             // Capture the display under (x, y) — global points, top-left origin — leaving out windows of
-            // `excludePids` (Study Buddy's own overlay and popups) and `excludeWindowIds` (never-record
+            // `excludePids` (Gloss's own overlay and popups) and `excludeWindowIds` (never-record
             // windows), then crop to `rect` (global points). Memory only, like every capture.
             guard CGPreflightScreenCaptureAccess() else { throw HelperError.noPermission }
             let point = CGPoint(x: req["x"] as? Double ?? 0, y: req["y"] as? Double ?? 0)

@@ -1,10 +1,10 @@
-# PRD — Study Buddy (working name)
+# PRD — Gloss (formerly Study Buddy)
 
 > A study partner on my Mac. I start a session, it studies alongside me, answers questions about what I'm pointing at, and quizzes me at the end.
 
 ## 1. What we're building
 
-Study Buddy is a small Mac menu bar app, **for my own personal use**.
+Gloss is a small Mac menu bar app, **for my own personal use**.
 
 ### The flow
 1. **Start a session.** I click the menu bar icon, pick a course, and optionally type a goal ("finish induction practice problems").

@@ -109,7 +109,7 @@ export default function StartPopup() {
               Click <b>Open System Settings</b>, then turn on <b>Electron</b> under Screen &amp; System Audio
               Recording.
             </li>
-            <li>Quit Study Buddy from its menu and start it again (macOS applies the permission on restart).</li>
+            <li>Quit Gloss from its menu and start it again (macOS applies the permission on restart).</li>
           </ol>
           <button
             type="button"

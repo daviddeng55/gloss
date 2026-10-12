@@ -95,7 +95,7 @@ export class AskController {
   }
 
   /**
-   * Starts Study Buddy Voice and, the first time, asks macOS for Microphone and Speech Recognition
+   * Starts Gloss Voice and, the first time, asks macOS for Microphone and Speech Recognition
    * permission. Voice stays off (typing still works) if either is refused.
    */
   private async setUpVoice(locale: string) {
@@ -110,7 +110,7 @@ export class AskController {
       if (st.mic === "not-asked" || st.speech === "not-asked") st = await this.voice.requestPermission();
       if (st.mic !== "granted" || st.speech !== "granted") {
         const missing = [st.mic !== "granted" && "Microphone", st.speech !== "granted" && "Speech Recognition"].filter(Boolean).join(" and ");
-        this.notify(`Voice is off: ${missing} permission for "Study Buddy Voice" isn't on. You can still type questions.`);
+        this.notify(`Voice is off: ${missing} permission for "Gloss Voice" isn't on. You can still type questions.`);
         return;
       }
       if (!(await this.voice.status(locale)).onDevice) {
@@ -152,7 +152,7 @@ export class AskController {
   }
 
   private notify(body: string) {
-    new Notification({ title: "Study Buddy", body }).show();
+    new Notification({ title: "Gloss", body }).show();
   }
 
   private async begin() {
@@ -311,7 +311,7 @@ export class AskController {
       h: display.bounds.height,
     }, this.settings.ask);
     try {
-      // Leave out Study Buddy's own windows and any never-record window that's visible.
+      // Leave out Gloss's own windows and any never-record window that's visible.
       const windows = await s.helper.windows();
       const blocked = windows
         .filter((w) => w.pid !== process.pid && blockedReason(w, s.neverRecord, s.projectName))

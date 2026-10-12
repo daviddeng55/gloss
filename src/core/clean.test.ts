@@ -119,6 +119,8 @@ test("this project's own editor/terminal windows are skipped, other VS Code fold
   assert.ok(isOwnWindow(win({ app: "Terminal", bundleId: "com.apple.Terminal", title: "nook — node src/session.ts — 80×24" }), "nook"));
   assert.ok(!isOwnWindow(code("a03.rkt — cs135"), "nook"));
   assert.ok(!isOwnWindow(win({ title: "The Nook e-reader — Google Chrome" }), "nook"));
+  assert.ok(isOwnWindow(code("README.md — gloss"), "nook"));
+  assert.ok(!isOwnWindow(code("glossary.md — cs135"), "nook"));
 });
 
 test("never-record list blocks Gmail, LinkedIn and the Claude app", () => {

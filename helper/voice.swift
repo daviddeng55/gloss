@@ -1,7 +1,7 @@
-// Study Buddy Voice: turns speech into text with Apple's on-device speech recognition.
+// Gloss Voice: turns speech into text with Apple's on-device speech recognition.
 // A separate small program because macOS requires the app using the microphone and speech recognition
 // to say why (see voice-Info.plist, embedded into this binary). The capture helper starts it as its own
-// app ("vision-helper --disclaim"), so macOS asks permission for Study Buddy Voice itself.
+// app ("vision-helper --disclaim"), so macOS asks permission for Gloss Voice itself.
 // Audio is never written to disk and never leaves the Mac (requiresOnDeviceRecognition).
 //
 // JSON lines on stdin/stdout:

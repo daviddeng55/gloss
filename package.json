@@ -1,9 +1,9 @@
 {
-  "name": "study-buddy",
+  "name": "gloss",
   "version": "1.0.0",
   "description": "A study partner on my Mac",
   "scripts": {
-    "build:helper": "mkdir -p bin && swiftc -O -swift-version 5 helper/vision-helper.swift -o bin/vision-helper && swiftc -O -swift-version 5 helper/voice.swift -o \"bin/Study Buddy Voice\" -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker helper/voice-Info.plist && codesign -s - -f -i com.studybuddy.voice \"bin/Study Buddy Voice\"",
+    "build:helper": "mkdir -p bin && swiftc -O -swift-version 5 helper/vision-helper.swift -o bin/vision-helper && swiftc -O -swift-version 5 helper/voice.swift -o \"bin/Gloss Voice\" -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker helper/voice-Info.plist && codesign -s - -f -i com.daviddeng.gloss.voice \"bin/Gloss Voice\"",
     "session": "node src/cli/session.ts",
     "ocr-test": "node src/cli/ocr-test.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.web.json",
@@ -40,6 +40,6 @@
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true
   },
-  "productName": "Study Buddy",
+  "productName": "Gloss",
   "main": "./out/main/index.js"
 }

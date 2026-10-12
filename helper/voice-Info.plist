@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>com.studybuddy.voice</string>
+  <string>com.daviddeng.gloss.voice</string>
   <key>CFBundleName</key>
-  <string>Study Buddy Voice</string>
+  <string>Gloss Voice</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Study Buddy listens only while you're asking a question (between the two presses of the ask shortcut).</string>
+  <string>Gloss listens only while you're asking a question (between the two presses of the ask shortcut).</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Study Buddy turns your spoken question into text on your Mac. Audio never leaves your Mac.</string>
+  <string>Gloss turns your spoken question into text on your Mac. Audio never leaves your Mac.</string>
 </dict>
 </plist>

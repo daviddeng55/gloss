@@ -44,10 +44,8 @@ const EDITORS_AND_TERMINALS = new Set([
 export function isOwnWindow(w: WindowInfo, projectName: string): boolean {
   if (!EDITORS_AND_TERMINALS.has(w.bundleId.toLowerCase())) return false;
   if (w.title.trim() === "") return true; // can't tell what's in it, so play safe
-  const name = projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[\\s—–\\-|/])${name}($|[\\s—–\\-|/])|session\\.ts|npm run session|study-buddy`, "i").test(
-    w.title,
-  );
+  const names = [projectName, "gloss"].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return new RegExp(`(^|[\\s—–\\-|/])(${names})($|[\\s—–\\-|/])|session\\.ts|npm run session`, "i").test(w.title);
 }
 
 /** Browser pages with nothing to study on them. */
