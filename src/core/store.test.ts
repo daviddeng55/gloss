@@ -155,7 +155,9 @@ test("upgrading an older database backs it up first and indexes the existing pas
     db.close();
     // Turn it back into a version-4 database (before "Find it").
     const raw = new DatabaseSync(path);
-    raw.exec(`DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update;
+    raw.exec(`DROP TABLE notes_fts; DROP TABLE note_sections; DROP TABLE topics;
+              ALTER TABLE sessions DROP COLUMN notes_status; ALTER TABLE sessions DROP COLUMN notes_error;
+              DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update;
               DROP TABLE chunks_fts; ALTER TABLE chunks DROP COLUMN fts_rowid; PRAGMA user_version = 4;`);
     raw.close();
     const upgraded = new StudyDb(path);

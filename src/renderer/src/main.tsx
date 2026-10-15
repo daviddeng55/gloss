@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import Ask from "./Ask.tsx";
-import History from "./History.tsx";
+import Library from "./Notes.tsx";
 import Learn from "./Learn.tsx";
 import Settings from "./Settings.tsx";
 import Warmup from "./Warmup.tsx";
@@ -10,7 +10,8 @@ import Review from "./Review.tsx";
 import Popover from "./Popover.tsx";
 import "./index.css";
 
-// One page, several screens: #/popover (menu bar), #/history, #/review/<session>[/summary|quiz], #/overlay, #/ask/<ask>.
+// One page, several screens: #/popover (menu bar), #/history[/<topic>[/<section>]] (Notes + All captures),
+// #/review/<session>[/summary|quiz], #/overlay, #/ask/<ask>.
 const [route, param, extra] = location.hash.replace(/^#\/?/, "").split("/");
 // A window reused for another screen (e.g. the review window opened again at the quiz) only changes the
 // hash, which doesn't reload the page: reload so the new screen shows.
@@ -34,7 +35,7 @@ createRoot(document.getElementById("root")!).render(
     ) : route === "review" && param ? (
       <Review sessionId={param} section={extra === "summary" || extra === "quiz" ? extra : undefined} />
     ) : (
-      <History />
+      <Library topicId={param} sectionId={extra} />
     )}
   </StrictMode>,
 );

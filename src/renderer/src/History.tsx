@@ -1,14 +1,15 @@
-// History window: sessions grouped by course on the left, the selected session's notes on the right.
+// "All captures": every raw capture, by session (grouped by course), with delete controls. Reached from
+// the Notes sidebar; `highlightChunkId` scrolls to the capture a note's source link came from.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AppState, Course, SessionDetail, SessionRow } from "../../shared/types.ts";
 import { plainMathToLatex } from "../../shared/mathText.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
 import Rich from "./Rich.tsx";
 
-export default function History() {
+export default function History(props: { onBack: () => void; initialSessionId?: string; highlightChunkId?: string }) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [sessions, setSessions] = useState<SessionRow[] | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(props.initialSessionId ?? null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [state, setState] = useState<AppState>({ status: "idle" });
 
@@ -56,10 +57,10 @@ export default function History() {
     <div className="flex h-screen text-[13px] text-ink">
       <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-ink/[0.025]">
         <div className="drag h-12 shrink-0" />
-        <h1 className="px-4 pb-3 font-serif text-[26px] font-semibold tracking-tight">History</h1>
-        <button onClick={() => void window.api.openLearn()} className="btn-ghost mx-2 mb-2 justify-start px-2 text-ink">
-          How you learn →
+        <button onClick={props.onBack} className="btn-ghost mx-2 mb-1 h-7 justify-start px-2">
+          ← Notes
         </button>
+        <h1 className="px-4 pb-3 font-serif text-[26px] font-semibold tracking-tight">All captures</h1>
         <nav className="flex-1 overflow-y-auto px-2 pb-4">
           {sessions === null ? null : sessions.length === 0 ? (
             <p className="px-2 py-4 text-muted">Your sessions will appear here.</p>
@@ -123,6 +124,7 @@ export default function History() {
           </div>
         ) : detail ? (
           <SessionView
+            highlightChunkId={detail.id === props.initialSessionId ? props.highlightChunkId : undefined}
             s={detail}
             courseName={courseName(detail.courseId)}
             live={detail.id === liveId}
@@ -138,9 +140,13 @@ export default function History() {
   );
 }
 
-function SessionView(props: { s: SessionDetail; courseName: string; live: boolean; onChanged: () => void; onDeleted: () => void }) {
+function SessionView(props: { s: SessionDetail; courseName: string; live: boolean; highlightChunkId?: string; onChanged: () => void; onDeleted: () => void }) {
   const { s, courseName, live, onChanged } = props;
   const started = new Date(s.startedAt);
+  // Came from a note's source link: show that capture.
+  useEffect(() => {
+    if (props.highlightChunkId) document.querySelector(`[data-chunk="${props.highlightChunkId}"]`)?.scrollIntoView({ block: "center" });
+  }, [props.highlightChunkId]);
   return (
     <div className="flex-1 overflow-y-auto px-8 pb-12">
       <div key={s.id} className="appear max-w-3xl">
@@ -255,7 +261,7 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
       ) : (
         <ol className="divide-y divide-line">
           {s.chunks.map((c) => (
-            <li key={c.id} className="group py-4 first:pt-0">
+            <li key={c.id} data-chunk={c.id} className={`group py-4 first:pt-0 ${c.id === props.highlightChunkId ? "-mx-4 rounded-xl bg-accent-soft/50 px-4 first:pt-4" : ""}`}>
               <div className="mb-1 flex items-center gap-2">
                 <p className="min-w-0 flex-1 truncate text-[12px] text-muted">
                   <span className="tabular-nums">{timeFmt.format(new Date(c.capturedAt))}</span> · {c.sourceApp}

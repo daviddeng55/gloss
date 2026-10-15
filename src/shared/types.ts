@@ -49,8 +49,12 @@ export type QuestionRow = {
   answers: { level: string; text: string; at: string }[];
 };
 
-/** A "Find it" result: one captured passage that matches the search. Matching words are marked (shared/search.ts). */
+/**
+ * A "Find it" result: a raw capture or a section of your notes that matches the search. Matching words
+ * are marked (shared/search.ts). For notes, sourceTitle is the section title.
+ */
 export type FoundMoment = {
+  kind: "capture" | "note";
   chunkId: string;
   sessionId: string;
   courseId: string;
@@ -59,6 +63,38 @@ export type FoundMoment = {
   sourceTitle: string;
   capturedAt: string;
   snippet: string;
+  topicId?: string;
+  topicTitle?: string;
+  sectionId?: string;
+};
+
+export type NoteKind = "definition" | "theorem" | "formula" | "example" | "mistake" | "point";
+
+/** The Notes sidebar: courses with their topics, and whether notes are still being written. */
+export type NoteTree = {
+  courses: { courseId: string; courseName: string; topics: { id: string; title: string; sections: number; updatedAt: string }[] }[];
+  pending: number; // sessions whose notes aren't written yet
+  writing: boolean; // notes are being written right now
+};
+
+export type NoteTopic = {
+  id: string;
+  courseId: string;
+  courseName: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+  sections: {
+    id: string;
+    kind: NoteKind;
+    title: string;
+    body: string;
+    chunkId?: string; // the raw capture it came from (gone if that passage was deleted)
+    sessionId: string;
+    capturedAt?: string;
+    sourceTitle?: string;
+  }[];
 };
 
 export type SessionDetail = SessionRow & { chunks: ChunkRow[]; questions: QuestionRow[] };
@@ -218,5 +254,12 @@ export interface StudyApi {
   popoverView(): Promise<PopoverView>;
   onPopoverOpen(callback: (view: PopoverView) => void): () => void;
   find(query: string): Promise<FoundMoment[]>;
+  getNoteTree(): Promise<NoteTree>;
+  getTopic(id: string): Promise<NoteTopic | null>;
+  getCapture(chunkId: string): Promise<ChunkRow | null>;
+  openNotes(topicId: string, sectionId?: string): Promise<void>;
+  deleteTopic(id: string): Promise<void>;
+  /** Notes changed (a topic was written or updated, or writing started/stopped). */
+  onNotes(callback: () => void): () => void;
   foundText(chunkId: string, query: string): Promise<string | null>;
 }

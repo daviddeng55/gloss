@@ -217,7 +217,10 @@ export default function Popover() {
 
       {/* Search results, or the last few sessions */}
       {query.trim() ? (
-        <FindResults query={query} onOpen={(m) => void openFound(m, query).then(setFound)} />
+        <FindResults
+          query={query}
+          onOpen={(m) => (m.kind === "note" && m.topicId ? void window.api.openNotes(m.topicId, m.sectionId) : void openFound(m, query).then(setFound))}
+        />
       ) : (
         <section className="flex-1 overflow-y-auto px-2 pt-3">
           <h2 className="eyebrow px-2 pb-2">Recent sessions</h2>
@@ -268,7 +271,7 @@ export default function Popover() {
       {/* Footer */}
       <footer className="flex items-center justify-between border-t border-line px-2 py-2">
         <button type="button" onClick={() => void window.api.openHistory()} className="btn-ghost h-7 px-2 font-medium text-ink">
-          See all sessions →
+          Open notes →
         </button>
         <div className="flex items-center gap-1">
           <button

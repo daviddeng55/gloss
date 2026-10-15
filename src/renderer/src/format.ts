@@ -7,3 +7,6 @@ export function duration(ms: number): string {
   if (min < 60) return `${min} min`;
   return `${Math.floor(min / 60)} h ${min % 60} min`;
 }
+
+/** "Oct 14" */
+export const shortDateFmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });

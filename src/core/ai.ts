@@ -95,7 +95,7 @@ async function runWaiting() {
 }
 
 /** One chat call. With `schema`, the model must reply with JSON matching it, which we parse. */
-function chat<T = string>(
+export function chat<T = string>(
   cfg: AiConfig,
   req: { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number },
 ): Promise<T> {
@@ -170,7 +170,7 @@ export async function checkAi(cfg: AiConfig = DEFAULT_AI): Promise<{ ok: true } 
 export type Passage = { id: string; text: string; sourceTitle: string };
 
 /** Numbered passages for a prompt, trimmed to fit: evenly sample if the session is very long. */
-function numbered(passages: Passage[], maxChars: number): { text: string; used: Passage[] } {
+export function numbered(passages: Passage[], maxChars: number): { text: string; used: Passage[] } {
   let used = passages;
   const total = passages.reduce((n, p) => n + p.text.length, 0);
   if (total > maxChars) {

@@ -3,9 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import type { ChunkRow, FoundMoment, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
+import type { ChunkRow, FoundMoment, NoteTopic, NoteTree, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
 import type { Passage, QuizDraft } from "./ai.ts";
 import { conceptKey, type Evidence, type HintLevelName } from "./learner.ts";
+import type { NoteSectionDraft } from "./notes.ts";
 import type { NewChunk } from "./chunker.ts";
 import { MATCH_END, MATCH_START, toFtsQuery } from "../shared/search.ts";
 
@@ -118,6 +119,48 @@ const MIGRATIONS = [
    CREATE TRIGGER chunks_fts_update AFTER UPDATE OF text, source_title, source_app ON chunks BEGIN
      UPDATE chunks_fts SET text = new.text, source_title = new.source_title, source_app = new.source_app WHERE rowid = new.fts_rowid;
    END;`,
+  // 6: Notes — class notes per course and topic, written from the raw captures (which stay as they are).
+  // Each section points to the capture it came from; deleting a session or passage removes its sections.
+  `CREATE TABLE topics (
+     id         TEXT PRIMARY KEY,
+     course_id  TEXT NOT NULL,
+     title      TEXT NOT NULL,
+     key        TEXT NOT NULL,              -- normalized title, for merging
+     summary    TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL,
+     UNIQUE (course_id, key)
+   );
+   CREATE TABLE note_sections (
+     seq        INTEGER PRIMARY KEY,        -- stable row number, used by the search index
+     id         TEXT NOT NULL UNIQUE,
+     topic_id   TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     chunk_id   TEXT REFERENCES chunks(id) ON DELETE CASCADE,
+     kind       TEXT NOT NULL,              -- definition | theorem | formula | example | mistake | point
+     title      TEXT NOT NULL,
+     body       TEXT NOT NULL,              -- Markdown with $LaTeX$
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX note_sections_topic ON note_sections(topic_id, seq);
+   CREATE INDEX note_sections_session ON note_sections(session_id);
+   CREATE INDEX note_sections_chunk ON note_sections(chunk_id);
+   ALTER TABLE sessions ADD COLUMN notes_status TEXT;  -- NULL = not written yet | done | skipped | error
+   ALTER TABLE sessions ADD COLUMN notes_error TEXT;
+   CREATE VIRTUAL TABLE notes_fts USING fts5(
+     title, body, topic, section_id UNINDEXED,
+     tokenize = 'unicode61 remove_diacritics 2'
+   );
+   CREATE TRIGGER note_sections_fts_insert AFTER INSERT ON note_sections BEGIN
+     INSERT INTO notes_fts (rowid, title, body, topic, section_id)
+       VALUES (new.seq, new.title, new.body, (SELECT title FROM topics WHERE id = new.topic_id), new.id);
+   END;
+   CREATE TRIGGER note_sections_fts_delete AFTER DELETE ON note_sections BEGIN
+     DELETE FROM notes_fts WHERE rowid = old.seq;
+   END;
+   CREATE TRIGGER note_sections_fts_update AFTER UPDATE OF title, body ON note_sections BEGIN
+     UPDATE notes_fts SET title = new.title, body = new.body WHERE rowid = new.seq;
+   END;`,
 ];
 
 type Row = Record<string, any>;
@@ -229,6 +272,7 @@ export class StudyDb {
          WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?`,
       )
       .all(MATCH_START, MATCH_END, MATCH_START, MATCH_END, query, limit) as Row[]).map((r) => ({
+      kind: "capture" as const,
       chunkId: r.id,
       sessionId: r.session_id,
       courseId: r.course_id,
@@ -248,6 +292,156 @@ export class StudyDb {
           .get(MATCH_START, MATCH_END, query, chunkId)
       : undefined) as Row | undefined;
     return r?.text ?? (this.getChunkText(chunkId) || null);
+  }
+
+  /** Note sections matching what you typed, best first, with the matching words marked. */
+  searchNotes(input: string, limit = 10): Omit<FoundMoment, "courseName">[] {
+    const query = toFtsQuery(input);
+    if (!query) return [];
+    return (this.db
+      .prepare(
+        `SELECT n.id, n.session_id, n.chunk_id, n.created_at, t.id AS topic_id, t.course_id, t.title AS topic_title,
+                c.source_app, c.captured_at,
+                highlight(notes_fts, 0, ?, ?) AS title, snippet(notes_fts, 1, ?, ?, '…', 24) AS snippet
+         FROM notes_fts JOIN note_sections n ON n.seq = notes_fts.rowid JOIN topics t ON t.id = n.topic_id
+         LEFT JOIN chunks c ON c.id = n.chunk_id
+         WHERE notes_fts MATCH ? ORDER BY rank LIMIT ?`,
+      )
+      .all(MATCH_START, MATCH_END, MATCH_START, MATCH_END, query, limit) as Row[]).map((r) => ({
+      kind: "note" as const,
+      chunkId: r.chunk_id ?? "",
+      sessionId: r.session_id,
+      courseId: r.course_id,
+      sourceApp: r.source_app ?? "",
+      sourceTitle: r.title,
+      capturedAt: r.captured_at ?? r.created_at,
+      snippet: r.snippet,
+      topicId: r.topic_id,
+      topicTitle: r.topic_title,
+      sectionId: r.id,
+    }));
+  }
+
+  // ---------- Notes: course → topic → sections ----------
+
+  /** Sessions whose notes haven't been written yet (ended, with text), oldest first. */
+  sessionsNeedingNotes(): { id: string; courseId: string }[] {
+    return (this.db
+      .prepare(
+        `SELECT s.id, s.course_id FROM sessions s
+         WHERE s.ended_at IS NOT NULL AND s.notes_status IS NULL AND EXISTS (SELECT 1 FROM chunks WHERE session_id = s.id)
+         ORDER BY s.started_at`,
+      )
+      .all() as Row[]).map((r) => ({ id: r.id, courseId: r.course_id }));
+  }
+
+  setNotesStatus(sessionId: string, status: "done" | "skipped" | "error", error?: string) {
+    this.db.prepare("UPDATE sessions SET notes_status = ?, notes_error = ? WHERE id = ?").run(status, error ?? null, sessionId);
+  }
+
+  /** Every topic, for matching new material to existing topics. */
+  topicTitles(): { id: string; courseId: string; title: string }[] {
+    return (this.db.prepare("SELECT id, course_id, title FROM topics ORDER BY created_at").all() as Row[]).map((r) => ({
+      id: r.id,
+      courseId: r.course_id,
+      title: r.title,
+    }));
+  }
+
+  /** A topic's summary and section titles (what the notes already say), or null if it doesn't exist. */
+  topicForMerge(courseId: string, key: string): { id: string; summary: string; sectionTitles: string[] } | null {
+    const t = this.db.prepare("SELECT id, summary FROM topics WHERE course_id = ? AND key = ?").get(courseId, key) as Row | undefined;
+    if (!t) return null;
+    const titles = (this.db.prepare("SELECT title FROM note_sections WHERE topic_id = ? ORDER BY seq").all(t.id) as Row[]).map((r) => r.title);
+    return { id: t.id, summary: t.summary, sectionTitles: titles };
+  }
+
+  /** Every section title in a course's notes (to avoid writing the same thing under two topics). */
+  courseSectionTitles(courseId: string): string[] {
+    return (this.db
+      .prepare("SELECT n.title FROM note_sections n JOIN topics t ON t.id = n.topic_id WHERE t.course_id = ?")
+      .all(courseId) as Row[]).map((r) => r.title);
+  }
+
+  /** Adds new material to a topic (creating it if needed), all at once. */
+  saveTopicNotes(n: { courseId: string; title: string; key: string; summary: string; sessionId: string; sections: NoteSectionDraft[] }): string {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN");
+    try {
+      let id = (this.db.prepare("SELECT id FROM topics WHERE course_id = ? AND key = ?").get(n.courseId, n.key) as Row | undefined)?.id as string | undefined;
+      if (!id) {
+        id = randomUUID();
+        this.db
+          .prepare("INSERT INTO topics (id, course_id, title, key, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(id, n.courseId, n.title, n.key, n.summary, now, now);
+      } else {
+        this.db.prepare("UPDATE topics SET summary = ?, updated_at = ? WHERE id = ?").run(n.summary, now, id);
+      }
+      const insert = this.db.prepare(
+        "INSERT INTO note_sections (id, topic_id, session_id, chunk_id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      for (const s of n.sections) insert.run(randomUUID(), id, n.sessionId, s.passageId, s.kind, s.title, s.body, now);
+      this.db.exec("COMMIT");
+      return id;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /** Courses' topics for the sidebar (oldest topic first, like a course outline), and what's still being written. */
+  noteTree(): Omit<NoteTree, "courses" | "writing"> & { topics: { id: string; courseId: string; title: string; sections: number; updatedAt: string }[] } {
+    const topics = (this.db
+      .prepare(
+        `SELECT t.id, t.course_id, t.title, t.updated_at, COUNT(n.seq) AS sections
+         FROM topics t LEFT JOIN note_sections n ON n.topic_id = t.id GROUP BY t.id ORDER BY t.created_at`,
+      )
+      .all() as Row[]).map((r) => ({ id: r.id, courseId: r.course_id, title: r.title, sections: r.sections, updatedAt: r.updated_at }));
+    const pending = (this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sessions s WHERE s.ended_at IS NOT NULL AND s.notes_status IS NULL
+         AND EXISTS (SELECT 1 FROM chunks WHERE session_id = s.id)`,
+      )
+      .get() as Row).n as number;
+    return { topics, pending };
+  }
+
+  /** One topic with its sections and where each came from. */
+  getTopic(id: string): Omit<NoteTopic, "courseName"> | null {
+    const t = this.db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Row | undefined;
+    if (!t) return null;
+    const sections = (this.db
+      .prepare(
+        `SELECT n.*, c.captured_at, c.source_title FROM note_sections n LEFT JOIN chunks c ON c.id = n.chunk_id
+         WHERE n.topic_id = ? ORDER BY n.seq`,
+      )
+      .all(id) as Row[]).map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      title: r.title,
+      body: r.body,
+      chunkId: r.chunk_id ?? undefined,
+      sessionId: r.session_id,
+      capturedAt: r.captured_at ?? undefined,
+      sourceTitle: r.source_title ?? undefined,
+    }));
+    return { id: t.id, courseId: t.course_id, title: t.title, summary: t.summary, createdAt: t.created_at, updatedAt: t.updated_at, sections };
+  }
+
+  /** One raw capture, for the "from Oct 14, 2:14 PM" links in notes. */
+  getChunk(id: string): ChunkRow | null {
+    const r = this.db.prepare("SELECT * FROM chunks WHERE id = ?").get(id) as Row | undefined;
+    return r ? toChunk(r) : null;
+  }
+
+  /** Deletes a topic's notes. The captures they were written from stay. */
+  deleteTopic(id: string) {
+    this.db.prepare("DELETE FROM topics WHERE id = ?").run(id); // its sections cascade
+  }
+
+  /** Topics left without any sections (their sessions or passages were deleted) are removed. */
+  private removeEmptyTopics() {
+    this.db.exec("DELETE FROM topics WHERE id NOT IN (SELECT topic_id FROM note_sections)");
   }
 
   // ---------- Stage 3: summary and quiz ----------
@@ -562,8 +756,9 @@ export class StudyDb {
   deleteSession(sessionId: string) {
     this.db.exec("BEGIN");
     this.db.prepare("DELETE FROM evidence WHERE session_id = ?").run(sessionId);
-    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId); // chunks, quiz, questions cascade
+    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId); // chunks, quiz, questions, note sections cascade
     this.removeOrphanConcepts();
+    this.removeEmptyTopics();
     this.db.exec("COMMIT");
   }
 
@@ -574,6 +769,7 @@ export class StudyDb {
     for (const id of ids) this.db.prepare("DELETE FROM evidence WHERE session_id = ?").run(id);
     this.db.prepare("DELETE FROM sessions WHERE course_id = ?").run(courseId);
     this.db.prepare("DELETE FROM concepts WHERE course_id = ?").run(courseId);
+    this.removeEmptyTopics();
     this.db.exec("COMMIT");
   }
 
@@ -584,7 +780,8 @@ export class StudyDb {
 
   /** Removes one passage (the user chose to; e.g. a page they didn't mean to study). */
   deleteChunk(id: string) {
-    this.db.prepare("DELETE FROM chunks WHERE id = ?").run(id);
+    this.db.prepare("DELETE FROM chunks WHERE id = ?").run(id); // its note sections go too
+    this.removeEmptyTopics();
   }
 
   /** Clears a session's summary and quiz (including answers) so they can be made again. */

@@ -2,6 +2,7 @@
 // Run: node scripts/seed-demo-db.ts <path/to/demo.db>   (refuses to touch an existing file)
 import { existsSync } from "node:fs";
 import { StudyDb } from "../src/core/db.ts";
+import { topicKey } from "../src/core/notes.ts";
 
 const path = process.argv[2];
 if (!path) throw new Error("Usage: node scripts/seed-demo-db.ts <path/to/new.db>");
@@ -144,6 +145,46 @@ for (const [courseId, name, evs] of evidence) {
   db.linkConcept(id, chunk, s);
   for (const e of evs) db.addEvidence(id, { ...e, hintLevel: e.kind === "ask" ? "nudge" : undefined });
 }
+
+// ---------- Notes (as the notes writer would make them) ----------
+const [c0, c1, c2, c3] = induction.chunks;
+db.saveTopicNotes({
+  courseId: "math135",
+  title: "Strong Induction",
+  key: topicKey("Strong Induction"),
+  summary: "Strong induction proves $P(n)$ for every $n \\in \\mathbb{N}$ by assuming **all** earlier cases $P(1), \\dots, P(k)$ when proving $P(k+1)$. It is handy when a step depends on more than one earlier case, as with the Fibonacci numbers.",
+  sessionId: induction.id,
+  sections: [
+    { kind: "definition", title: "Principle of Strong Induction (POSI)", body: "Let $P(n)$ be an open sentence. If $P(1)$ is true, and for every $k \\in \\mathbb{N}$, $P(1) \\land P(2) \\land \\dots \\land P(k)$ implies $P(k+1)$, then $P(n)$ is true for all $n \\in \\mathbb{N}$.", passageId: c0 },
+    { kind: "theorem", title: "Fibonacci bound", body: "For the Fibonacci numbers $f_1 = f_2 = 1$, $f_n = f_{n-1} + f_{n-2}$:\n\n$$f_n < 2^n \\quad \\text{for all } n \\in \\mathbb{N}.$$", passageId: c1 },
+    { kind: "point", title: "Two base cases", body: "When the inductive step uses the two previous terms, check both $f_1$ and $f_2$ directly.", passageId: c1 },
+    { kind: "example", title: "Proving the Fibonacci bound", body: "Assume $f_i < 2^i$ for all $1 \\le i \\le k$, where $k \\ge 2$. Then\n\n$$f_{k+1} = f_k + f_{k-1} < 2^k + 2^{k-1} < 2^k + 2^k = 2^{k+1},$$\n\nso the statement holds for $k+1$.", passageId: c2 },
+    { kind: "example", title: "Every integer $n \\ge 2$ is a product of primes", body: "If $n$ is prime, done. Otherwise write $n = ab$ with $1 < a, b < n$; by the inductive hypothesis both $a$ and $b$ are products of primes, so $n$ is too.", passageId: c3 },
+    { kind: "mistake", title: "Only one base case", body: "With a two-term recurrence, proving just $P(1)$ leaves $P(2)$ unsupported — the step from $k = 1$ would need $f_0$.", passageId: c1 },
+  ],
+});
+db.setNotesStatus(induction.id, "done");
+db.saveTopicNotes({
+  courseId: "math135",
+  title: "Set Equality",
+  key: topicKey("Set Equality"),
+  summary: "Two sets are equal exactly when each is a subset of the other.",
+  sessionId: sets.id,
+  sections: [
+    { kind: "definition", title: "Subset", body: "$S \\subseteq T$ means every element of $S$ is also an element of $T$.", passageId: sets.chunks[1] },
+    { kind: "theorem", title: "Set equality", body: "$S = T \\iff S \\subseteq T$ and $T \\subseteq S$.", passageId: sets.chunks[0] },
+  ],
+});
+db.setNotesStatus(sets.id, "done");
+db.saveTopicNotes({
+  courseId: "cs135",
+  title: "Lists",
+  key: topicKey("Lists"),
+  summary: "A list is either empty or a value consed onto a list.",
+  sessionId: racket.id,
+  sections: [{ kind: "definition", title: "List", body: "A list is either `empty` or `(cons v lst)`, where `v` is a value and `lst` is a list.", passageId: racket.chunks[0] }],
+});
+db.setNotesStatus(racket.id, "done");
 
 db.close();
 console.log(`Demo database written to ${path}`);

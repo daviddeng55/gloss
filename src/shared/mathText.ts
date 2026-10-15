@@ -53,3 +53,16 @@ export function plainMathToLatex(text: string): string {
     })
     .join("");
 }
+
+/**
+ * Notes text for display: plain math converted, display formulas ($$…$$) on their own lines so they
+ * render as blocks, and single line breaks kept (worked examples put each step on its own line).
+ */
+export function notesMarkdown(text: string): string {
+  return plainMathToLatex(text)
+    .replace(/\s*\$\$([\s\S]+?)\$\$\s*/g, (_m, math: string) => `\n\n$$\n${math.trim()}\n$$\n\n`)
+    .split(/\n{2,}/)
+    .map((p) => (p.startsWith("$$") ? p : p.replace(/\n/g, "  \n")))
+    .join("\n\n")
+    .trim();
+}

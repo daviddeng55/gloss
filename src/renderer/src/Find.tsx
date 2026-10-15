@@ -33,6 +33,16 @@ function When({ at }: { at: string }) {
 
 export type Found = { moment: FoundMoment; text: string };
 
+/** Notes store math as LaTeX ("$f_{k+1} \le 2^k$"); snippets show it as plain text ("f_k+1 ≤ 2^k"). */
+function plainNotation(s: string): string {
+  const symbols: Record<string, string> = { le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", cdot: "·", dots: "…", ldots: "…", cdots: "⋯", in: "∈", forall: "∀", exists: "∃", sum: "Σ", infty: "∞", to: "→", implies: "⇒", iff: "⇔", land: "∧", lor: "∨", times: "×", sqrt: "√" };
+  const sets: Record<string, string> = { N: "ℕ", Z: "ℤ", Q: "ℚ", R: "ℝ", C: "ℂ" };
+  return s
+    .replace(/\\mathbb\{?([NZQRC])\}?/g, (m, letter: string) => sets[letter])
+    .replace(/\\([a-zA-Z]+)/g, (m, name: string) => symbols[name] ?? name)
+    .replace(/[${}]/g, "");
+}
+
 /** Fetches a result's whole passage, with the matches marked. */
 export async function openFound(moment: FoundMoment, query: string): Promise<Found> {
   return { moment, text: (await window.api.foundText(moment.chunkId, query)) ?? "This passage has been deleted." };
@@ -98,13 +108,20 @@ export function FindResults({ query, onOpen }: { query: string; onOpen: (m: Foun
               className={`flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left transition-colors duration-150 ${i === selected ? "bg-hover" : ""}`}
             >
               <span className="flex items-baseline justify-between gap-3 text-[11px] text-muted">
-                <span className="truncate">
-                  <span className="font-medium text-ink">{m.courseName}</span> · <Marked text={m.sourceTitle} />
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-px text-[10px] font-semibold tracking-wide uppercase ${m.kind === "note" ? "bg-accent-soft text-ink" : "bg-hover text-muted"}`}
+                  >
+                    {m.kind === "note" ? "Note" : "Capture"}
+                  </span>
+                  <span className="truncate">
+                    <span className="font-medium text-ink">{m.courseName}</span> · {m.kind === "note" ? <>{m.topicTitle} — <Marked text={plainNotation(m.sourceTitle)} /></> : <Marked text={m.sourceTitle} />}
+                  </span>
                 </span>
                 <When at={m.capturedAt} />
               </span>
               <span className="line-clamp-2 font-serif text-[13.5px] leading-snug">
-                <Marked text={m.snippet} />
+                <Marked text={m.kind === "note" ? plainNotation(m.snippet) : m.snippet} />
               </span>
             </button>
           </li>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { plainMathToLatex } from "./mathText.ts";
+import { notesMarkdown, plainMathToLatex } from "./mathText.ts";
 
 test("plain-text math in summaries becomes LaTeX", () => {
   const cases: [string, string][] = [
@@ -24,4 +24,11 @@ test("ordinary text and existing LaTeX are left alone", () => {
 test("bracketed exponents and subscripts are raised or lowered whole", () => {
   assert.equal(plainMathToLatex("2^(k-1) < 2^(k+1)"), "$2^{k-1}$ < $2^{k+1}$");
   assert.equal(plainMathToLatex("f_(k+1) = f_k + f_(k-1)"), "$f_{k+1}$ = $f_{k}$ + $f_{k-1}$");
+});
+
+test("notes: display formulas get their own lines and steps keep their line breaks", () => {
+  assert.equal(
+    notesMarkdown("Substitute:\n$$3a^2 = 12k^2$$\nSimplify:\nso it is odd."),
+    "Substitute:\n\n$$\n3a^2 = 12k^2\n$$\n\nSimplify:  \nso it is odd.",
+  );
 });

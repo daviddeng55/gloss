@@ -10,12 +10,13 @@ import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
-import type { AppState, Course, PopoverView, StartResult } from "../shared/types.ts";
+import type { AppState, Course, NoteTree, PopoverView, StartResult } from "../shared/types.ts";
 import { loadSettings, sanitizeSettings, type Settings } from "../core/settings.ts";
 import { writeFileSync } from "node:fs";
 import { ConfusionDetector } from "../core/confusion.ts";
 import { AskController } from "./ask.ts";
 import { LearnerService } from "./learner.ts";
+import { NotesService } from "./notes.ts";
 import { ReviewService } from "./review.ts";
 
 const ROOT = app.getAppPath(); // the project folder while developing
@@ -42,6 +43,7 @@ let reviewWin: BrowserWindow | null = null;
 let reviews: ReviewService;
 let asker: AskController;
 let learner: LearnerService;
+let notes: NotesService;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
@@ -112,7 +114,7 @@ function updateTray() {
       : []),
     { type: "separator" },
     { label: "Find It…", click: () => showPopover("find") },
-    { label: "History…", click: showHistory },
+    { label: "Notes…", click: () => showHistory() },
     { label: "How You Learn…", click: openLearn },
     { label: "Settings…", accelerator: "Command+,", click: openSettings },
     { type: "separator" },
@@ -254,7 +256,8 @@ function endSession(): Promise<void> {
   if (!quitting) {
     reviews.ensure(c.sessionId, saved); // summary, then quiz, once the text is saved
     openReview(c.sessionId);
-    // Afterwards, quietly give the new notes embeddings (course memory), if the model is there.
+    // Afterwards, quietly write the class notes and give the new text embeddings (course memory).
+    void saved.then(() => notes.start());
     void saved.then(() => reviews.whenIdle()).then(() => learner.backfillEmbeddings()).catch(() => {});
   }
   return saved;
@@ -341,7 +344,9 @@ function togglePopover() {
   showPopover();
 }
 
-function showHistory() {
+/** The Notes window (it also holds "All captures"). `route` opens it at a topic: history/<topic>/<section>. */
+function showHistory(route = "history") {
+  if (history && route !== "history") load(history, route);
   if (!history) {
     history = new BrowserWindow({
       width: 980,
@@ -356,7 +361,7 @@ function showHistory() {
     });
     history.on("closed", () => (history = null));
     history.once("ready-to-show", () => history?.show());
-    load(history, "history");
+    load(history, route);
   } else {
     history.webContents.send("state", getState()); // refresh the list
     history.show();
@@ -485,6 +490,24 @@ function openReview(sessionId: string, section?: "summary" | "quiz") {
   app.focus({ steal: true });
 }
 
+/** The Notes sidebar: topics grouped by course, in courses.json order (unknown courses last). */
+function noteTree(): NoteTree {
+  const { topics, pending } = db.noteTree();
+  const courses = loadCourses();
+  const order = new Map(courses.map((c, i) => [c.id, i]));
+  const byCourse = new Map<string, NoteTree["courses"][number]>();
+  for (const t of topics) {
+    const c = byCourse.get(t.courseId) ?? { courseId: t.courseId, courseName: courses.find((x) => x.id === t.courseId)?.name ?? t.courseId, topics: [] };
+    c.topics.push({ id: t.id, title: t.title, sections: t.sections, updatedAt: t.updatedAt });
+    byCourse.set(t.courseId, c);
+  }
+  return {
+    courses: [...byCourse.values()].sort((a, b) => (order.get(a.courseId) ?? 99) - (order.get(b.courseId) ?? 99)),
+    pending,
+    writing: notes.writing(),
+  };
+}
+
 // ---------- IPC (requests from the windows) ----------
 
 function registerIpc() {
@@ -496,7 +519,22 @@ function registerIpc() {
   ipcMain.handle("sessions:list", () => db.listSessions());
   ipcMain.handle("find:search", (_e, query: unknown) => {
     const names = new Map(loadCourses().map((c) => [c.id, c.name]));
-    return db.search(String(query)).map((m) => ({ ...m, courseName: names.get(m.courseId) ?? m.courseId }));
+    // Your notes first (cleaner), then the raw captures.
+    return [...db.searchNotes(String(query), 5), ...db.search(String(query))].map((m) => ({ ...m, courseName: names.get(m.courseId) ?? m.courseId }));
+  });
+  ipcMain.handle("notes:tree", () => noteTree());
+  ipcMain.handle("notes:topic", (_e, id: unknown) => {
+    const t = db.getTopic(String(id));
+    return t ? { ...t, courseName: loadCourses().find((c) => c.id === t.courseId)?.name ?? t.courseId } : null;
+  });
+  ipcMain.handle("notes:capture", (_e, chunkId: unknown) => db.getChunk(String(chunkId)));
+  ipcMain.handle("notes:delete-topic", (_e, id: unknown) => {
+    db.deleteTopic(String(id));
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send("notes");
+  });
+  ipcMain.handle("notes:open", (_e, topicId: unknown, sectionId: unknown) => {
+    hidePopover();
+    showHistory(`history/${String(topicId)}${typeof sectionId === "string" ? `/${sectionId}` : ""}`);
   });
   ipcMain.handle("find:text", (_e, chunkId: unknown, query: unknown) => db.foundText(String(chunkId), String(query)));
   ipcMain.handle("sessions:get", (_e, id: unknown) => db.getSession(String(id)));
@@ -622,8 +660,20 @@ app.whenReady().then(() => {
     voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Gloss Voice") },
     learner,
   });
+  notes = new NotesService({
+    db,
+    courses: loadCourses,
+    model: () => loadSettings(fromRoot("settings.json")).ai.reviewModel,
+    changed: () => {
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send("notes");
+    },
+    isRecording: () => current !== null,
+    reviewsIdle: () => reviews.whenIdle(),
+  });
   // Older notes get embeddings too, once the embedding model is there (quietly, in the background).
   setTimeout(() => void learner.backfillEmbeddings().catch(() => {}), 30_000);
+  // Class notes for sessions that don't have them yet (e.g. ones from before Notes existed).
+  if (!process.env.GLOSS_DB) setTimeout(() => notes.start(), 45_000);
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
@@ -688,6 +738,7 @@ app.whenReady().then(() => {
   if (process.env.GLOSS_SMOKE_LEARN) void smokeLearn(process.env.GLOSS_SMOKE_LEARN);
   if (process.env.GLOSS_SMOKE_FIND) void smokeFind(process.env.GLOSS_SMOKE_FIND);
   if (process.env.GLOSS_SMOKE_DESIGN) void smokeDesign(process.env.GLOSS_SMOKE_DESIGN);
+  if (process.env.GLOSS_SMOKE_NOTES) void smokeNotes(Number(process.env.GLOSS_SMOKE_NOTES));
   // Development checks: show errors from every window in the terminal.
   if (process.env.GLOSS_DB) {
     app.on("web-contents-created", (_e, wc) =>
@@ -762,10 +813,36 @@ async function smokeFind(dir: string) {
   await wait(800);
   writeFileSync(join(dir, "find-results.png"), (await popup!.webContents.capturePage()).toPNG());
   console.log("SMOKE find list:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
-  await js(`document.querySelector("[data-result]")?.click()`);
+  await js(`[...document.querySelectorAll("[data-result]")].find((b) => b.textContent.includes("Capture"))?.click()`);
   await wait(800);
   writeFileSync(join(dir, "find-detail.png"), (await popup!.webContents.capturePage()).toPNG());
   console.log("SMOKE find detail:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
+  app.quit();
+}
+
+/**
+ * Development check for Notes: writes notes with the real model for up to `n` sessions that don't
+ * have them yet (oldest first), printing what was made and how long it took. Use a copy of a database.
+ */
+async function smokeNotes(n: number) {
+  const todo = db.sessionsNeedingNotes().slice(0, n);
+  console.log(`SMOKE notes: ${todo.length} sessions`);
+  const t0 = Date.now();
+  for (const s of todo) {
+    const t = Date.now();
+    try {
+      const r = await notes.write(s.id, s.courseId);
+      console.log(`SMOKE notes: ${s.id.slice(0, 8)} ${s.courseId} -> ${r.sections} sections in [${r.topics.join(", ")}] (${((Date.now() - t) / 1000).toFixed(0)} s)`);
+    } catch (err) {
+      console.log(`SMOKE notes: ${s.id.slice(0, 8)} failed: ${(err as Error).message}`);
+    }
+  }
+  console.log(`SMOKE notes: done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  for (const t of db.noteTree().topics) {
+    const topic = db.getTopic(t.id)!;
+    console.log(`\nSMOKE topic ${t.courseId} / ${topic.title}\n  summary: ${topic.summary}`);
+    for (const sec of topic.sections) console.log(`  [${sec.kind}] ${sec.title}: ${sec.body.replace(/\s+/g, " ").slice(0, 220)}`);
+  }
   app.quit();
 }
 
@@ -806,7 +883,8 @@ async function smokeDesign(dir: string) {
     await type(popup!, "induction");
     await wait(600);
     await shot(popup!, "popover-find");
-    await js(popup!, `document.querySelector("[data-result]")?.click()`);
+    // A raw capture opens inside the popover (a note would open the Notes window).
+    await js(popup!, `[...document.querySelectorAll("[data-result]")].find((b) => b.textContent.includes("Capture"))?.click()`);
     await wait(600);
     await shot(popup!, "popover-find-detail");
   }
@@ -814,7 +892,21 @@ async function smokeDesign(dir: string) {
 
   showHistory();
   await wait(2500);
-  await shot(history!, empty ? "history-empty" : "history");
+  await shot(history!, empty ? "notes-empty" : "notes");
+  if (!empty) {
+    await js(history!, `[...document.querySelectorAll("button")].find((b) => b.textContent.startsWith("from "))?.click()`);
+    await wait(800);
+    await shot(history!, "notes-source");
+    await js(history!, `(() => { const m = document.querySelector("main .overflow-y-auto"); m.scrollTop = m.scrollHeight; })()`);
+    await wait(400);
+    await shot(history!, "notes-bottom");
+    await js(history!, `[...document.querySelectorAll("aside button")].find((b) => b.textContent === "Set Equality")?.click()`);
+    await wait(800);
+    await shot(history!, "notes-topic2");
+  }
+  await js(history!, `[...document.querySelectorAll("button")].find((b) => b.textContent === "All captures")?.click()`);
+  await wait(1000);
+  await shot(history!, empty ? "captures-empty" : "captures");
   history!.close();
 
   if (!empty) {

@@ -36,10 +36,14 @@ _Screenshots coming soon._
   each one (this fades if you don't practise) and which kind of help works for you. It uses this to aim
   quizzes at weak spots, warm you up with questions due for review, and pitch answers at the right
   level. You can see, correct and delete all of it under **How You Learn…**.
-- **Find it.** Search everything Gloss has read on your screen. See [Find it](#find-it) below.
+- **Notes.** After each session, Gloss writes clean class notes in the background, organised by
+  course and topic (e.g. MATH 135 → Strong Induction): a summary, key definitions, theorems and
+  formulas, worked examples and common mistakes. New material on a topic you've studied before is
+  merged into it. Every section links back to the raw capture it came from. See [Notes](#notes).
+- **Find it.** Search your notes and everything Gloss has read on your screen. See [Find it](#find-it) below.
 - **Privacy controls.** Apps and sites on a never-record list (password managers, banking, messaging,
   email, private windows) are never read. Card numbers, SINs and text near "password" are redacted
-  before anything is saved. You can delete a session, or everything for a course, from History.
+  before anything is saved. You can delete a session, or everything for a course, under Notes → All captures.
 
 ## Requirements
 
@@ -109,24 +113,38 @@ Gloss doesn't need Accessibility or Input Monitoring.
 3. **Option+A** → circle → ask. **Esc** cancels.
 4. **End Session** → the review window opens with the summary (about 1 minute) and then the quiz
    (about 2 more minutes).
-5. The popover lists your last 3 sessions with **Summary** and **Quiz** buttons. **See all sessions**
-   (History) reopens past reviews and lets you delete passages, sessions or whole courses.
-   **How You Learn…** shows what the app thinks you know.
+5. A few minutes later your **notes** are ready: **Open notes** in the popover. **All captures** (in
+   the Notes sidebar) has every raw capture by session, where you can reopen reviews and delete
+   passages, sessions or whole courses. **How You Learn** shows what the app thinks you know.
+6. The popover lists your last 3 sessions with **Summary** and **Quiz** buttons.
 
 Your data is stored in `~/Library/Application Support/Gloss/`. Delete that folder to erase
 everything.
 
+## Notes
+
+The Notes window (**Open notes** in the popover) lists your courses with their topics. Each topic reads
+like good class notes: a short summary, key definitions in highlighted boxes, theorems and formulas
+(rendered as math), worked examples and common mistakes. Under every section, "from Oct 14, 2:14 PM"
+opens the raw capture it was written from, so you can check it.
+
+Notes are written by the local AI after a session's summary and quiz, one session at a time, while
+you're not recording (about 2–4 minutes per session). The first time, Gloss also writes notes for all
+your earlier sessions in the background; the sidebar shows "Writing notes…" until it's done. The small
+model can get a formula wrong (especially where the screen reader garbled a symbol), so check anything
+important against its source. Your raw captures are never changed.
+
 ## Find it
 
 Click the menu bar icon and type in the search box what you remember, e.g. `strong induction`. Results
-appear as you type: a snippet with the matching words highlighted, the date and time, and the course,
-app and window it came from. Click a result (or use ↑ ↓ and Return) to read everything captured at
-that moment; **Esc** goes back, then closes.
+appear as you type, labelled **Note** (from your notes) or **Capture** (raw text from the screen): a
+snippet with the matching words highlighted, the date and time, and the course and topic or window.
+Click a capture (or use ↑ ↓ and Return) to read everything captured at that moment; click a note to
+open it in the Notes window. **Esc** goes back, then closes.
 
-It uses SQLite's built-in full-text search over the text Gloss already saved, so it's instant and
-works offline with no AI. Every word must appear (any order, any case), and the last word can be
-unfinished. Passages captured before this feature are included, and deleted ones disappear from the
-results.
+It uses SQLite's built-in full-text search, so it's instant and works offline with no AI. Every word
+must appear (any order, any case), and the last word can be unfinished. Deleted passages disappear
+from the results.
 
 ## Known limitations
 

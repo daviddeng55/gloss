@@ -51,6 +51,16 @@ const api: StudyApi = {
     ipcRenderer.on("popover:open", listener);
     return () => ipcRenderer.removeListener("popover:open", listener);
   },
+  getNoteTree: () => ipcRenderer.invoke("notes:tree"),
+  getTopic: (id) => ipcRenderer.invoke("notes:topic", id),
+  getCapture: (chunkId) => ipcRenderer.invoke("notes:capture", chunkId),
+  deleteTopic: (id) => ipcRenderer.invoke("notes:delete-topic", id),
+  openNotes: (topicId, sectionId) => ipcRenderer.invoke("notes:open", topicId, sectionId),
+  onNotes: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("notes", listener);
+    return () => ipcRenderer.removeListener("notes", listener);
+  },
   find: (query) => ipcRenderer.invoke("find:search", query),
   foundText: (chunkId, query) => ipcRenderer.invoke("find:text", chunkId, query),
   deleteCourseData: (courseId) => ipcRenderer.invoke("courses:delete-data", courseId),
