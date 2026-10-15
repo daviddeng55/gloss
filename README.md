@@ -76,7 +76,7 @@ Make sure Ollama is running (its llama icon is in the menu bar), then start Glos
 npm run dev               # keep this terminal open while you use the app
 ```
 
-A book icon appears in the menu bar. Click it, then **Start Session…**.
+A forgetting-curve icon appears in the menu bar. Click it, then **Start session**.
 
 **Your courses** are in `courses.json`. Edit it to add your own. Set `"math": true` on courses with
 formulas to turn on math reading. You can also change courses and most other options in
@@ -100,14 +100,17 @@ Gloss doesn't need Accessibility or Input Monitoring.
 
 ## Using it
 
-1. **Start Session…** → pick a course → optionally type a goal → **Start**. The icon turns red and
-   shows your study time. **Pause/Resume** is in the menu; sessions pause while the Mac is locked.
+1. Click the menu bar icon to open the popover: **Start session** → pick a course → optionally type
+   a goal → **Start**. The dot in the icon fills in and your study time shows next to it. The popover
+   has **End session** with a timer and a pause button; sessions also pause while the Mac is locked.
+   Right-click the icon for the plain text menu.
 2. Study as usual. A window or tab is read only after it's been in front for 8 seconds, so quick
    switches are ignored.
 3. **Option+A** → circle → ask. **Esc** cancels.
 4. **End Session** → the review window opens with the summary (about 1 minute) and then the quiz
    (about 2 more minutes).
-5. **History…** reopens past reviews and lets you delete passages, sessions or whole courses.
+5. The popover lists your last 3 sessions with **Summary** and **Quiz** buttons. **See all sessions**
+   (History) reopens past reviews and lets you delete passages, sessions or whole courses.
    **How You Learn…** shows what the app thinks you know.
 
 Your data is stored in `~/Library/Application Support/Gloss/`. Delete that folder to erase
@@ -115,7 +118,7 @@ everything.
 
 ## Find it
 
-Click the menu bar icon → **Find It…** and type what you remember, e.g. `strong induction`. Results
+Click the menu bar icon and type in the search box what you remember, e.g. `strong induction`. Results
 appear as you type: a snippet with the matching words highlighted, the date and time, and the course,
 app and window it came from. Click a result (or use ↑ ↓ and Return) to read everything captured at
 that moment; **Esc** goes back, then closes.

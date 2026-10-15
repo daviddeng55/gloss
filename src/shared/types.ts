@@ -158,6 +158,8 @@ export type AskEvent =
   | { askId: string; type: "done"; turn: number }
   | { askId: string; type: "error"; turn: number; message: string };
 
+export type PopoverView = "home" | "start" | "find";
+
 export type AppState =
   | { status: "idle" }
   | {
@@ -185,7 +187,7 @@ export interface StudyApi {
   getReview(sessionId: string): Promise<ReviewData | null>;
   retryReview(sessionId: string): Promise<void>;
   answerQuestion(itemId: string, response: string): Promise<AnswerResult>;
-  openReview(sessionId: string): Promise<void>;
+  openReview(sessionId: string, section?: "summary" | "quiz"): Promise<void>;
   redoReview(sessionId: string): Promise<void>;
   deletePassage(chunkId: string): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
@@ -207,6 +209,14 @@ export interface StudyApi {
   onOverlay(callback: (e: OverlayEvent) => void): () => void;
   overlayClick(): Promise<void>;
   onState(callback: (state: AppState) => void): () => void;
+  pauseSession(): Promise<void>;
+  resumeSession(): Promise<void>;
+  endSession(): Promise<void>;
+  openHistory(): Promise<void>;
+  quit(): Promise<void>;
+  /** The popover: which view to show, now and each time it opens. */
+  popoverView(): Promise<PopoverView>;
+  onPopoverOpen(callback: (view: PopoverView) => void): () => void;
   find(query: string): Promise<FoundMoment[]>;
   foundText(chunkId: string, query: string): Promise<string | null>;
 }

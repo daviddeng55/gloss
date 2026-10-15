@@ -1,4 +1,5 @@
-// The popup under the menu bar icon: pick a course, optionally type a goal, Start.
+// The popover's start view: pick a course, optionally type a goal, Start.
+// (The popover remounts it each time it opens, so it starts from a clean form.)
 import { useEffect, useRef, useState } from "react";
 import type { Course, StartResult } from "../../shared/types.ts";
 
@@ -12,7 +13,7 @@ function readLastCourse(): string | null {
   }
 }
 
-export default function StartPopup() {
+export default function StartView({ onBack }: { onBack: () => void }) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseId, setCourseId] = useState<string | null>(readLastCourse());
   const [goal, setGoal] = useState("");
@@ -22,20 +23,6 @@ export default function StartPopup() {
 
   useEffect(() => {
     void window.api.getCourses().then(setCourses);
-    // Each time the popup opens, start from a clean form.
-    return window.api.onState(() => {
-      setGoal("");
-      setProblem(null);
-      setStarting(false);
-      void window.api.getCourses().then(setCourses);
-      goalRef.current?.focus();
-    });
-  }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && void window.api.closeWindow();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const selected = courses.find((c) => c.id === courseId);
@@ -62,7 +49,12 @@ export default function StartPopup() {
         void start();
       }}
     >
-      <h1 className="text-[15px] font-semibold">Start a study session</h1>
+      <div className="flex flex-col gap-1">
+        <button type="button" onClick={onBack} className="self-start font-medium text-accent hover:text-accent-strong">
+          ← Back
+        </button>
+        <h1 className="text-[15px] font-semibold">Start a study session</h1>
+      </div>
 
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-2 text-xs font-medium text-muted">Course</legend>

@@ -53,6 +53,11 @@
   }
 }
 
+/* The menu bar popover uses the plain system font. */
+.font-system {
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
 /* Text you might want to copy (notes, goals) stays selectable. */
 .selectable {
   user-select: text;

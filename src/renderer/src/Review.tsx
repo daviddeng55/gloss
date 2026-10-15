@@ -5,9 +5,15 @@ import { plainMathToLatex } from "../../shared/mathText.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
 import Rich from "./Rich.tsx";
 
-export default function Review({ sessionId }: { sessionId: string }) {
+export default function Review({ sessionId, section }: { sessionId: string; section?: "summary" | "quiz" }) {
   const [data, setData] = useState<ReviewData | null>(null);
   const load = useCallback(() => void window.api.getReview(sessionId).then(setData), [sessionId]);
+  const loaded = !!data;
+
+  // Opened from the popover's "Summary" or "Quiz" button: start at that part.
+  useEffect(() => {
+    if (loaded && section) document.getElementById(`review-${section}`)?.scrollIntoView({ block: "start" });
+  }, [loaded, section]);
 
   useEffect(() => {
     load();
@@ -31,7 +37,7 @@ export default function Review({ sessionId }: { sessionId: string }) {
             {data.goal ? <p className="mt-1 text-muted">Goal: {data.goal}</p> : null}
           </header>
 
-          <section className="mb-10">
+          <section id="review-summary" className="mb-10 scroll-mt-4">
             <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">What you covered</h2>
             <SummaryView data={data} onRetry={() => void window.api.retryReview(sessionId)} />
           </section>
@@ -58,7 +64,7 @@ export default function Review({ sessionId }: { sessionId: string }) {
             </section>
           ) : null}
 
-          <section>
+          <section id="review-quiz" className="scroll-mt-4">
             <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">Quiz</h2>
             <QuizView data={data} onRetry={() => void window.api.retryReview(sessionId)} reload={load} />
           </section>

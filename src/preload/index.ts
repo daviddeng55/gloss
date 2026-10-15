@@ -1,7 +1,7 @@
 // The only bridge between the windows and the main process. Windows get `window.api` and
 // nothing else: no file system or Node access.
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppState, AskEvent, OverlayEvent, StudyApi } from "../shared/types.ts";
+import type { AppState, AskEvent, OverlayEvent, PopoverView, StudyApi } from "../shared/types.ts";
 
 const api: StudyApi = {
   getCourses: () => ipcRenderer.invoke("courses:list"),
@@ -33,13 +33,24 @@ const api: StudyApi = {
   getReview: (sessionId) => ipcRenderer.invoke("review:get", sessionId),
   retryReview: (sessionId) => ipcRenderer.invoke("review:retry", sessionId),
   answerQuestion: (itemId, response) => ipcRenderer.invoke("quiz:answer", itemId, response),
-  openReview: (sessionId) => ipcRenderer.invoke("review:open", sessionId),
+  openReview: (sessionId, section) => ipcRenderer.invoke("review:open", sessionId, section),
   redoReview: (sessionId) => ipcRenderer.invoke("review:redo", sessionId),
   deletePassage: (chunkId) => ipcRenderer.invoke("chunks:delete", chunkId),
   deleteSession: (sessionId) => ipcRenderer.invoke("sessions:delete", sessionId),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (s) => ipcRenderer.invoke("settings:save", s),
   openSettings: () => ipcRenderer.invoke("settings:open"),
+  pauseSession: () => ipcRenderer.invoke("session:pause"),
+  resumeSession: () => ipcRenderer.invoke("session:resume"),
+  endSession: () => ipcRenderer.invoke("session:end"),
+  openHistory: () => ipcRenderer.invoke("history:open"),
+  quit: () => ipcRenderer.invoke("app:quit"),
+  popoverView: () => ipcRenderer.invoke("popover:view"),
+  onPopoverOpen: (callback) => {
+    const listener = (_e: unknown, view: PopoverView) => callback(view);
+    ipcRenderer.on("popover:open", listener);
+    return () => ipcRenderer.removeListener("popover:open", listener);
+  },
   find: (query) => ipcRenderer.invoke("find:search", query),
   foundText: (chunkId, query) => ipcRenderer.invoke("find:text", chunkId, query),
   deleteCourseData: (courseId) => ipcRenderer.invoke("courses:delete-data", courseId),

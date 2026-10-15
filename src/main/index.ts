@@ -10,7 +10,7 @@ import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
-import type { AppState, Course, StartResult } from "../shared/types.ts";
+import type { AppState, Course, PopoverView, StartResult } from "../shared/types.ts";
 import { loadSettings, sanitizeSettings, type Settings } from "../core/settings.ts";
 import { writeFileSync } from "node:fs";
 import { ConfusionDetector } from "../core/confusion.ts";
@@ -45,7 +45,7 @@ let learner: LearnerService;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
-let findWin: BrowserWindow | null = null;
+let trayMenu: Menu | null = null; // the text menu, shown on right-click
 let current: Current | null = null;
 let lastMenuKey = "";
 let aiProblem = ""; // shown in the menu when the local AI isn't available
@@ -89,7 +89,7 @@ function broadcast() {
 const icons = {
   idle: () => nativeImage.createFromPath(fromRoot("resources", "trayIdleTemplate.png")),
   paused: () => nativeImage.createFromPath(fromRoot("resources", "trayPausedTemplate.png")),
-  recording: () => nativeImage.createFromPath(fromRoot("resources", "trayRecording.png")),
+  recording: () => nativeImage.createFromPath(fromRoot("resources", "trayRecordingTemplate.png")),
 };
 
 function updateTray() {
@@ -111,7 +111,7 @@ function updateTray() {
         ]
       : []),
     { type: "separator" },
-    { label: "Find It…", click: showFind },
+    { label: "Find It…", click: () => showPopover("find") },
     { label: "History…", click: showHistory },
     { label: "How You Learn…", click: openLearn },
     { label: "Settings…", accelerator: "Command+,", click: openSettings },
@@ -120,7 +120,7 @@ function updateTray() {
   ];
   const items: Electron.MenuItemConstructorOptions[] =
     state.status === "idle"
-      ? [{ label: "Start Session…", click: showStartPopup }, ...common]
+      ? [{ label: "Start Session…", click: () => showPopover("start") }, ...common]
       : [
           { label: `${state.status === "paused" ? "Paused" : "Recording"}: ${state.courseName}`, enabled: false },
           ...(state.goal ? [{ label: `Goal: ${state.goal}`, enabled: false }] : []),
@@ -131,7 +131,7 @@ function updateTray() {
           { label: "End Session", click: () => void endSession() },
           ...common,
         ];
-  tray.setContextMenu(Menu.buildFromTemplate(items));
+  trayMenu = Menu.buildFromTemplate(items);
 }
 
 // ---------- sessions ----------
@@ -272,73 +272,73 @@ function load(win: BrowserWindow, route: string) {
   }
 }
 
-const POPUP = { width: 340, height: 440 };
+// ---------- the popover (left-click the menu bar icon) ----------
 
-function showStartPopup() {
-  if (!popup) {
-    popup = new BrowserWindow({
-      ...POPUP,
-      show: false,
-      frame: false,
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      skipTaskbar: true,
-      alwaysOnTop: true,
-      vibrancy: "popover",
-      visualEffectState: "active",
-      backgroundColor: "#00000000",
-      webPreferences: { preload, sandbox: true, contextIsolation: true },
-    });
-    popup.on("blur", () => popup?.hide());
-    load(popup, "start");
-  }
-  dropDown(popup, POPUP.width);
-  popup.webContents.send("state", getState()); // reset the form for a fresh start
-  popup.show();
-  app.focus({ steal: true });
+const POPOVER = { width: 360, height: 480 };
+let popoverView: PopoverView = "home";
+let popoverHiddenAt = 0;
+// Development checks take screenshots of the popover while other windows are open.
+const keepPopoverOpen = !!(process.env.GLOSS_SMOKE || process.env.GLOSS_SMOKE_FIND);
+
+/** Made (hidden) when the app starts, so it opens instantly. */
+function createPopover() {
+  popup = new BrowserWindow({
+    ...POPOVER,
+    show: false,
+    frame: false,
+    roundedCorners: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    vibrancy: "popover", // the frosted macOS look; follows light/dark mode by itself
+    visualEffectState: "active",
+    backgroundColor: "#00000000",
+    webPreferences: { preload, sandbox: true, contextIsolation: true },
+  });
+  popup.on("blur", () => {
+    if (!keepPopoverOpen) hidePopover();
+  });
+  load(popup, "popover");
 }
 
-/** Places a window so it drops down from the menu bar icon, kept on screen. */
-function dropDown(win: BrowserWindow, width: number) {
+/** Opens the popover under the menu bar icon, fading in. `view` picks what it shows first. */
+function showPopover(view: PopoverView = "home") {
+  if (!popup) createPopover();
+  const win = popup!;
+  popoverView = view;
+  win.webContents.send("popover:open", view);
+  win.webContents.send("state", getState());
+  // Drop down from the menu bar icon, kept on screen.
   const b = tray.getBounds();
   const area = screen.getDisplayNearestPoint({ x: b.x, y: b.y }).workArea;
-  const x = Math.min(Math.max(Math.round(b.x + b.width / 2 - width / 2), area.x + 8), area.x + area.width - width - 8);
+  const x = Math.min(Math.max(Math.round(b.x + b.width / 2 - POPOVER.width / 2), area.x + 8), area.x + area.width - POPOVER.width - 8);
   win.setPosition(x, Math.round(area.y + 6));
+  win.setOpacity(0);
+  win.show();
+  app.focus({ steal: true });
+  let step = 0;
+  const fade = setInterval(() => {
+    step++;
+    if (win.isDestroyed() || step >= 8) clearInterval(fade);
+    if (!win.isDestroyed()) win.setOpacity(Math.min(1, step / 8));
+  }, 16);
 }
 
-const FIND = { width: 480, height: 580 };
+function hidePopover() {
+  if (!popup?.isVisible()) return;
+  popup.hide();
+  popoverHiddenAt = Date.now();
+}
 
-/** "Find it": search everything captured. Drops down from the menu bar like the start popup. */
-function showFind() {
-  if (!findWin) {
-    findWin = new BrowserWindow({
-      ...FIND,
-      show: false,
-      frame: false,
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      skipTaskbar: true,
-      alwaysOnTop: true,
-      vibrancy: "popover",
-      visualEffectState: "active",
-      backgroundColor: "#00000000",
-      webPreferences: { preload, sandbox: true, contextIsolation: true },
-    });
-    findWin.on("blur", () => {
-      if (!process.env.GLOSS_SMOKE_FIND) findWin?.hide();
-    });
-    load(findWin, "find");
-  }
-  dropDown(findWin, FIND.width);
-  findWin.webContents.send("state", getState()); // focuses the search box
-  findWin.show();
-  app.focus({ steal: true });
+function togglePopover() {
+  if (popup?.isVisible()) return hidePopover();
+  // Clicking the icon while the popover is open first takes focus away (which closes it): don't reopen.
+  if (Date.now() - popoverHiddenAt < 300) return;
+  showPopover();
 }
 
 function showHistory() {
@@ -462,7 +462,8 @@ function openWarmup(sessionId: string) {
   load(warmupWin, `warmup/${sessionId}`);
 }
 
-function openReview(sessionId: string) {
+/** The review window; `section` scrolls it to the summary or the quiz. */
+function openReview(sessionId: string, section?: "summary" | "quiz") {
   if (!reviewWin) {
     reviewWin = new BrowserWindow({
       width: 760,
@@ -480,7 +481,7 @@ function openReview(sessionId: string) {
   } else {
     reviewWin.show();
   }
-  load(reviewWin, `review/${sessionId}`);
+  load(reviewWin, `review/${sessionId}${section ? `/${section}` : ""}`);
   app.focus({ steal: true });
 }
 
@@ -504,10 +505,20 @@ function registerIpc() {
   );
   ipcMain.handle("review:get", (_e, id: unknown) => reviews.get(String(id)));
   ipcMain.handle("review:retry", (_e, id: unknown) => reviews.retry(String(id)));
-  ipcMain.handle("review:open", (_e, id: unknown) => {
+  ipcMain.handle("review:open", (_e, id: unknown, section: unknown) => {
+    hidePopover();
     reviews.ensure(String(id));
-    openReview(String(id));
+    openReview(String(id), section === "summary" || section === "quiz" ? section : undefined);
   });
+  ipcMain.handle("session:pause", () => pauseSession());
+  ipcMain.handle("session:resume", () => resumeSession());
+  ipcMain.handle("session:end", () => void endSession());
+  ipcMain.handle("popover:view", () => popoverView);
+  ipcMain.handle("history:open", () => {
+    hidePopover();
+    showHistory();
+  });
+  ipcMain.handle("app:quit", () => app.quit());
   ipcMain.handle("settings:get", async () => {
     // Downloaded models that can tutor (not the math reader or the embedding model).
     let installed: string[] = [];
@@ -520,7 +531,10 @@ function registerIpc() {
     return { ...readAllSettings(), models: { math: "glm-ocr:q8_0", memory: "embeddinggemma" }, installed, aiProblem };
   });
   ipcMain.handle("settings:save", (_e, b: unknown) => saveAllSettings(b as SettingsBundle));
-  ipcMain.handle("settings:open", () => openSettings());
+  ipcMain.handle("settings:open", () => {
+    hidePopover();
+    openSettings();
+  });
   ipcMain.handle("learn:profile", () => learner.profile());
   ipcMain.handle("learn:mark", (_e, id: unknown, known: unknown) => db.setManual(String(id), typeof known === "boolean" ? known : null));
   ipcMain.handle("learn:delete", (_e, id: unknown) => db.deleteConcept(String(id)));
@@ -560,7 +574,7 @@ function registerIpc() {
   ipcMain.handle("window:close", (e) => {
     if (asker.isOverlay(BrowserWindow.fromWebContents(e.sender))) return asker.cancel(); // Esc while circling
     const win = BrowserWindow.fromWebContents(e.sender);
-    if (win === popup || win === findWin) win?.hide();
+    if (win === popup) hidePopover();
     else win?.close();
   });
 }
@@ -613,6 +627,14 @@ app.whenReady().then(() => {
   registerIpc();
   tray = new Tray(icons.idle());
   updateTray();
+  // Left click: the popover. Right click: the text menu, as before.
+  tray.on("click", togglePopover);
+  tray.on("right-click", () => {
+    hidePopover();
+    if (trayMenu) tray.popUpContextMenu(trayMenu);
+  });
+  if (process.env.GLOSS_THEME === "light" || process.env.GLOSS_THEME === "dark") nativeTheme.themeSource = process.env.GLOSS_THEME;
+  createPopover();
 
   // Check the local AI every 30 s so the menu can say clearly when it isn't available.
   const checkAiNow = async () => {
@@ -692,16 +714,28 @@ app.on("before-quit", (e) => {
 /** Development check: opens both windows, saves screenshots of them to `dir`, then quits. */
 async function smokeTest(dir: string) {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  showStartPopup();
+  showPopover();
   showHistory();
   await wait(3000);
   const { writeFileSync } = await import("node:fs");
   writeFileSync(join(dir, "popup.png"), (await popup!.webContents.capturePage()).toPNG());
+  showPopover("start");
+  await wait(600);
+  writeFileSync(join(dir, "popup-start.png"), (await popup!.webContents.capturePage()).toPNG());
+  showPopover();
+  await wait(600);
   writeFileSync(join(dir, "history.png"), (await history!.webContents.capturePage()).toPNG());
   // The popup's frosted background doesn't show up in screenshots, so also report what it contains.
   const text = await popup!.webContents.executeJavaScript("document.body.innerText");
   console.log("SMOKE popup text:", JSON.stringify(text));
   console.log("SMOKE state", JSON.stringify(getState()), "sessions", db.listSessions().length);
+  // The popover's "Quiz" button: the review window opens at the quiz.
+  const newest = db.listSessions().find((x) => x.chunkCount > 0);
+  if (newest) {
+    openReview(newest.id, "quiz");
+    await wait(2500);
+    writeFileSync(join(dir, "review-quiz.png"), (await reviewWin!.webContents.capturePage()).toPNG());
+  }
   const h = new VisionHelper({ helperPath: fromRoot("bin", "vision-helper") });
   console.log("SMOKE screen recording permission:", await h.hasPermission());
   h.close();
@@ -715,21 +749,21 @@ async function smokeTest(dir: string) {
 async function smokeFind(dir: string) {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const query = process.env.GLOSS_SMOKE_QUERY ?? "induction";
-  showFind();
+  showPopover("find");
   await wait(2500);
   const t0 = performance.now();
   const n = db.search(query).length;
   console.log(`SMOKE find: ${n} results for ${JSON.stringify(query)} in ${(performance.now() - t0).toFixed(1)} ms`);
-  const js = (code: string) => findWin!.webContents.executeJavaScript(code);
+  const js = (code: string) => popup!.webContents.executeJavaScript(code);
   await js(`(() => { const i = document.querySelector("input");
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, ${JSON.stringify(query)});
     i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await wait(800);
-  writeFileSync(join(dir, "find-results.png"), (await findWin!.webContents.capturePage()).toPNG());
+  writeFileSync(join(dir, "find-results.png"), (await popup!.webContents.capturePage()).toPNG());
   console.log("SMOKE find list:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
   await js(`document.querySelector("[data-result]")?.click()`);
   await wait(800);
-  writeFileSync(join(dir, "find-detail.png"), (await findWin!.webContents.capturePage()).toPNG());
+  writeFileSync(join(dir, "find-detail.png"), (await popup!.webContents.capturePage()).toPNG());
   console.log("SMOKE find detail:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
   app.quit();
 }
@@ -741,8 +775,14 @@ async function smokeSession(seconds: number) {
   console.log("SMOKE start", JSON.stringify(res), "title", JSON.stringify(tray.getTitle()));
   if (!res.ok) return app.quit();
   const id = current!.sessionId;
+  const popoverText = async () =>
+    JSON.stringify(String(await popup!.webContents.executeJavaScript("document.body.innerText")).split("\n").slice(0, 6).join(" | "));
+  console.log("SMOKE recording icon is a template image:", icons.recording().isTemplateImage());
   await wait((seconds / 2) * 1000);
+  console.log("SMOKE popover while recording:", await popoverText());
   pauseSession();
+  await wait(300);
+  console.log("SMOKE popover while paused:", await popoverText());
   const pausedAt = current!.loop.activeMs;
   const ticksAtPause = current!.loop.stats.ticks;
   console.log("SMOKE paused", JSON.stringify(getState().status), "title", JSON.stringify(tray.getTitle()));
