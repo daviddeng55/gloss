@@ -11,7 +11,7 @@ function Marked({ text }: { text: string }) {
     <>
       {splitMatches(text).map((p, i) =>
         p.match ? (
-          <mark key={i} className="rounded-sm bg-accent-soft px-0.5 text-accent-strong">
+          <mark key={i} className="rounded-[3px] bg-accent-soft px-0.5 text-ink">
             {p.text}
           </mark>
         ) : (
@@ -75,10 +75,16 @@ export function FindResults({ query, onOpen }: { query: string; onOpen: (m: Foun
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  if (!results.length) return <p className="px-4 pt-3 text-muted">Nothing found for “{query.trim()}”.</p>;
+  if (!results.length)
+    return (
+      <div className="appear px-4 pt-6 text-center">
+        <p className="font-serif text-[15px]">Nothing found for “{query.trim()}”</p>
+        <p className="mt-1 text-[12px] text-muted">Try fewer or different words — every word has to appear.</p>
+      </div>
+    );
   return (
     <>
-      <p className="px-4 pt-2 pb-1 text-[11px] text-muted">
+      <p className="eyebrow px-4 pt-3 pb-2">
         {results.length === 50 ? "Top 50 matches" : `${results.length} ${results.length === 1 ? "match" : "matches"}`}
       </p>
       <ul ref={listRef} className="flex-1 overflow-y-auto px-2 pb-2">
@@ -89,7 +95,7 @@ export function FindResults({ query, onOpen }: { query: string; onOpen: (m: Foun
               data-result
               onClick={() => onOpen(m)}
               onMouseMove={() => setSelected(i)}
-              className={`flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors ${i === selected ? "bg-ink/[0.07]" : ""}`}
+              className={`flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left transition-colors duration-150 ${i === selected ? "bg-hover" : ""}`}
             >
               <span className="flex items-baseline justify-between gap-3 text-[11px] text-muted">
                 <span className="truncate">
@@ -97,7 +103,7 @@ export function FindResults({ query, onOpen }: { query: string; onOpen: (m: Foun
                 </span>
                 <When at={m.capturedAt} />
               </span>
-              <span className="line-clamp-2 text-[12.5px] leading-snug">
+              <span className="line-clamp-2 font-serif text-[13.5px] leading-snug">
                 <Marked text={m.snippet} />
               </span>
             </button>
@@ -116,12 +122,12 @@ export function FindDetail({ found, onBack }: { found: Found; onBack: () => void
     ref.current?.querySelector("mark")?.scrollIntoView({ block: "center" });
   }, [found]);
   return (
-    <div className="flex h-screen flex-col text-[13px] text-ink">
-      <div className="flex flex-col gap-1 border-b border-line px-4 pt-3 pb-2.5">
-        <button type="button" onClick={onBack} className="self-start font-medium text-accent hover:text-accent-strong">
+    <div className="appear flex h-screen flex-col text-[13px] text-ink">
+      <div className="flex flex-col gap-1 border-b border-line px-4 pt-3 pb-3">
+        <button type="button" onClick={onBack} className="btn-ghost -ml-3 h-7 self-start px-3">
           ← Back
         </button>
-        <h1 className="truncate text-[14px] font-semibold">
+        <h1 className="truncate font-serif text-[16px] font-semibold">
           <Marked text={m.sourceTitle} />
         </h1>
         <p className="flex justify-between gap-3 text-[11px] text-muted">
@@ -131,7 +137,7 @@ export function FindDetail({ found, onBack }: { found: Found; onBack: () => void
           <When at={m.capturedAt} />
         </p>
       </div>
-      <div ref={ref} className="selectable flex-1 overflow-y-auto px-4 py-3 font-serif text-[14px] leading-relaxed whitespace-pre-wrap">
+      <div ref={ref} className="selectable flex-1 overflow-y-auto px-4 py-4 font-serif text-[15px] leading-relaxed whitespace-pre-wrap">
         <Marked text={found.text} />
       </div>
     </div>

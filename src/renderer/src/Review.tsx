@@ -25,50 +25,50 @@ export default function Review({ sessionId, section }: { sessionId: string; sect
   return (
     <div className="flex h-screen flex-col text-[14px] text-ink">
       <div className="drag h-12 shrink-0" />
-      <div className="flex-1 overflow-y-auto px-8 pb-12">
-        <div className="mx-auto max-w-2xl">
+      <div className="flex-1 overflow-y-auto px-8 pb-16">
+        <article className="appear mx-auto max-w-[680px]">
           <header className="mb-8">
-            <p className="text-sm text-muted">
-              {dateFmt.format(new Date(data.startedAt))} · {timeFmt.format(new Date(data.startedAt))}
+            <p className="eyebrow">
+              {data.courseName} · {dateFmt.format(new Date(data.startedAt))}, {timeFmt.format(new Date(data.startedAt))}
             </p>
-            <h1 className="text-[28px] leading-tight font-bold tracking-tight">
-              {data.courseName} · {duration(data.activeMs)} studied
+            <h1 className="mt-2 font-serif text-[34px] leading-[1.15] font-semibold tracking-tight">
+              {data.goal || `${data.courseName} session`}
             </h1>
-            {data.goal ? <p className="mt-1 text-muted">Goal: {data.goal}</p> : null}
+            <p className="mt-2 text-muted">{duration(data.activeMs)} studied</p>
           </header>
 
-          <section id="review-summary" className="mb-10 scroll-mt-4">
-            <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">What you covered</h2>
+          <section id="review-summary" className="mb-12 scroll-mt-4">
+            <h2 className="mb-4 font-serif text-[21px] font-semibold">What you covered</h2>
             <SummaryView data={data} onRetry={() => void window.api.retryReview(sessionId)} />
           </section>
 
           {data.connections.length ? (
-            <section className="mb-10">
-              <h2 className="mb-3 text-xs font-bold tracking-widest text-accent uppercase">Builds on</h2>
-              <div className="rounded-2xl border border-line bg-card p-4 shadow-sm">
-                <p className="mb-2 text-muted">Today's material uses ideas you've found hard before:</p>
-                <ul className="space-y-1.5">
+            <section className="mb-12">
+              <h2 className="mb-4 font-serif text-[21px] font-semibold">Builds on</h2>
+              <div className="card p-6">
+                <p className="mb-3 text-muted">Today's material uses ideas you've found hard before:</p>
+                <ul className="divide-y divide-line">
                   {data.connections.map((c) => (
-                    <li key={c.conceptId} className="flex items-baseline justify-between gap-3">
-                      <span className="font-serif text-[16px]">{c.name}</span>
-                      <span className="text-sm text-muted tabular-nums">
+                    <li key={c.conceptId} className="flex items-baseline justify-between gap-3 py-2">
+                      <span className="font-serif text-[17px]">{c.name}</span>
+                      <span className="text-[13px] text-muted tabular-nums">
                         {Math.round(c.current * 100)}% · last studied {dateFmt.format(new Date(c.lastStudied))}
                       </span>
                     </li>
                   ))}
                 </ul>
-                <button onClick={() => void window.api.openLearn()} className="mt-3 text-sm text-accent hover:underline">
-                  See how you learn →
+                <button onClick={() => void window.api.openLearn()} className="btn-secondary mt-4">
+                  See how you learn
                 </button>
               </div>
             </section>
           ) : null}
 
-          <section id="review-quiz" className="scroll-mt-4">
-            <h2 className="mb-4 text-xs font-bold tracking-widest text-accent uppercase">Quiz</h2>
+          <section id="review-quiz" className="min-h-[calc(100vh-7rem)] scroll-mt-4">
+            <h2 className="mb-4 font-serif text-[21px] font-semibold">Quiz</h2>
             <QuizView data={data} onRetry={() => void window.api.retryReview(sessionId)} reload={load} />
           </section>
-        </div>
+        </article>
       </div>
     </div>
   );
@@ -76,8 +76,8 @@ export default function Review({ sessionId, section }: { sessionId: string; sect
 
 function Working({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl bg-card px-4 py-3 text-muted shadow-sm">
-      <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />
+    <div className="card appear flex items-center gap-3 px-6 py-4 text-muted">
+      <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />
       <span>{children}</span>
     </div>
   );
@@ -85,10 +85,10 @@ function Working({ children }: { children: React.ReactNode }) {
 
 function Problem({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-xl bg-amber-500/15 px-4 py-3">
-      <p className="selectable">{message}</p>
+    <div className="appear flex items-center justify-between gap-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
+      <p className="selectable leading-relaxed">{message}</p>
       {onRetry ? (
-        <button onClick={onRetry} className="shrink-0 rounded-lg bg-amber-600 px-3 py-1 font-medium text-white hover:bg-amber-700">
+        <button onClick={onRetry} className="btn-secondary shrink-0">
           Try again
         </button>
       ) : null}
@@ -103,11 +103,11 @@ export function Source({ passages, chunkId }: { passages: Passages; chunkId: str
   const p = passages[chunkId];
   if (!p) return <p className="text-sm text-muted">That passage was deleted.</p>;
   return (
-    <div className="mt-2 rounded-xl border border-line bg-paper px-3 py-2 text-[14px]">
-      <p className="mb-1 truncate text-xs text-muted">
+    <div className="appear mt-3 rounded-xl border border-line bg-paper px-4 py-3 text-[14px]">
+      <p className="mb-2 truncate text-[12px] text-muted">
         {timeFmt.format(new Date(p.capturedAt))} · {p.sourceTitle || "unknown window"}
       </p>
-      <Rich text={p.text} keepLines className="font-serif" />
+      <Rich text={p.text} keepLines className="font-serif text-[15px]" />
     </div>
   );
 }
@@ -120,23 +120,23 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
   if (status !== "done" || !summary) return <Working>Summarizing your session… this takes about a minute.</Working>;
   if (!summary.ok) return <Problem message={summary.reason} />;
   return (
-    <ol className="space-y-3">
+    <ul className="appear space-y-6">
       {summary.points.map((pt, i) => (
-        <li key={i} className="flex gap-3">
-          <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[13px] font-bold text-accent-strong tabular-nums">{i + 1}</span>
+        <li key={i} className="flex gap-4">
+          <span className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-accent" aria-hidden />
           <div className="min-w-0 flex-1">
-            <Rich text={plainMathToLatex(pt.text)} className="font-serif text-[17px]" />
+            <Rich text={plainMathToLatex(pt.text)} className="font-serif text-[18px]" />
             {pt.passageIds.length ? (
-              <div className="mt-1 flex flex-wrap gap-1.5">
+              <div className="mt-2 flex flex-wrap gap-2">
                 {pt.passageIds.map((id, j) => {
                   const key = `${i}:${id}`;
                   return (
                     <button
                       key={id}
                       onClick={() => setOpen(open === key ? null : key)}
-                      className={`rounded-md px-2 py-0.5 text-xs ${open === key ? "bg-accent text-white" : "bg-accent-soft text-accent-strong hover:brightness-95"}`}
+                      className={`chip ${open === key ? "bg-accent-soft! text-ink" : "text-muted hover:text-ink"}`}
                     >
-                      Source {pt.passageIds.length > 1 ? j + 1 : ""}
+                      Source{pt.passageIds.length > 1 ? ` ${j + 1}` : ""}
                     </button>
                   );
                 })}
@@ -146,7 +146,7 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
           </div>
         </li>
       ))}
-    </ol>
+    </ul>
   );
 }
 
@@ -174,7 +174,10 @@ function QuizView({ data, onRetry, reload }: { data: ReviewData; onRetry: () => 
       item={items[current]}
       number={current + 1}
       total={items.length}
-      onAnswered={reload}
+      onAnswered={() => {
+        setIndex(current); // stay on this question (showing right/wrong) until "Next"
+        reload();
+      }}
       onNext={() => setIndex(current + 1)}
     />
   );
@@ -211,39 +214,57 @@ export function Question(props: {
     }
   }
 
+  const progress = ((number - 1 + (result ? 1 : 0)) / total) * 100;
   return (
-    <div className="rounded-2xl border border-line bg-card p-5 shadow-sm">
-      <p className="mb-2 text-xs font-medium text-muted">
-        Question {number} of {total} · {item.type === "multiple_choice" ? "Multiple choice" : "Short answer"}
-      </p>
-      <Rich text={item.question} className="mb-4 font-serif text-[18px] leading-snug" />
+    <div className="card appear p-6">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="eyebrow">
+          Question {number} of {total}
+        </p>
+        <p className="text-[12px] text-muted">{item.type === "multiple_choice" ? "Multiple choice" : "Short answer"}</p>
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-hover" role="progressbar" aria-valuenow={Math.round(progress)}>
+        <div className="h-full rounded-full bg-accent transition-[width] duration-200 ease-out" style={{ width: `${progress}%` }} />
+      </div>
+      <Rich text={item.question} className="mt-6 mb-6 font-serif text-[23px] leading-snug" />
 
       {item.type === "multiple_choice" ? (
         <div className="flex flex-col gap-2">
-          {item.options?.map((opt) => {
+          {item.options?.map((opt, i) => {
             const chosen = response === opt;
             const right = result && opt === result.answer;
             const wrong = result && chosen && !result.correct;
             return (
               <button
                 key={opt}
+                data-option
                 disabled={!!result || checking}
                 onClick={() => void submit(opt)}
-                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                className={`group flex w-full items-center gap-4 rounded-xl border px-4 py-3 text-left transition-colors duration-150 ${
                   right
-                    ? "border-good bg-good/15"
+                    ? "border-good/60 bg-good/10"
                     : wrong
-                      ? "border-bad bg-bad/15"
-                      : "border-line bg-paper enabled:hover:bg-accent-soft"
+                      ? "border-bad/60 bg-bad/10"
+                      : result
+                        ? "border-line opacity-55"
+                        : "border-line bg-card enabled:hover:border-accent/40 enabled:hover:bg-accent-soft/50"
                 }`}
               >
-                <Rich text={opt} className="font-serif text-[16px]" />
+                <span
+                  className={`flex size-7 shrink-0 items-center justify-center rounded-lg text-[12px] font-semibold transition-colors duration-150 ${
+                    right ? "bg-good text-white" : wrong ? "bg-bad text-white" : "border border-line text-muted group-enabled:group-hover:border-accent/40 group-enabled:group-hover:text-ink"
+                  }`}
+                  aria-hidden
+                >
+                  {right ? "✓" : wrong ? "✕" : String.fromCharCode(65 + i)}
+                </span>
+                <Rich text={opt} className="min-w-0 flex-1 font-serif text-[17px]" />
               </button>
             );
           })}
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-3">
           <SymbolBar
             disabled={!!result || checking}
             onInsert={(sym) => {
@@ -266,43 +287,39 @@ export function Question(props: {
             rows={3}
             placeholder="Your answer (typing sqrt(x), x^2 or sum works too)"
             autoFocus
-            className="selectable rounded-xl border border-line bg-paper px-3 py-2 outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 disabled:opacity-70"
+            className="field selectable rounded-xl px-4 py-3 font-serif text-[17px] leading-relaxed placeholder:font-sans placeholder:text-[14px] disabled:opacity-70"
           />
           {!result ? (
-            <button
-              onClick={() => void submit(response)}
-              disabled={checking || !response.trim()}
-              className="self-start rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong disabled:opacity-40"
-            >
+            <button onClick={() => void submit(response)} disabled={checking || !response.trim()} className="btn-primary self-start">
               {checking ? "Checking…" : "Check answer"}
             </button>
           ) : null}
         </div>
       )}
 
-      {failed ? <div className="mt-3"><Problem message={failed} onRetry={() => void submit(response)} /></div> : null}
+      {failed ? <div className="mt-4"><Problem message={failed} onRetry={() => void submit(response)} /></div> : null}
 
       {result ? (
-        <div className={`mt-4 rounded-lg px-4 py-3 ${result.correct ? "bg-good/15" : "bg-bad/15"}`}>
-          <p className="font-semibold">{result.correct ? "✓ Correct" : "✗ Not quite"}</p>
+        <div className={`appear mt-6 rounded-xl border px-4 py-3 ${result.correct ? "border-good/30 bg-good/10" : "border-bad/30 bg-bad/10"}`}>
+          <p className={`font-semibold ${result.correct ? "text-good" : "text-bad"}`}>{result.correct ? "Correct" : "Not quite"}</p>
           {!result.correct ? (
-            <div className="mt-1">
-              <span className="text-muted">Answer: </span>
-              <Rich text={result.answer} className="inline-block align-top font-serif" />
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="shrink-0 text-muted">Answer:</span>
+              <Rich text={result.answer} className="font-serif text-[16px]" />
             </div>
           ) : null}
-          {result.explanation ? <Rich text={result.explanation} className="mt-2 font-serif" /> : null}
+          {result.explanation ? <Rich text={result.explanation} className="mt-2 font-serif text-[16px]" /> : null}
         </div>
       ) : null}
 
-      <div className="mt-4 flex items-center justify-between gap-3">
+      <div className="mt-6 flex items-center justify-between gap-3">
         {item.chunkId ? (
-          <button onClick={() => setShowSource(!showSource)} className="text-sm text-accent hover:underline">
+          <button onClick={() => setShowSource(!showSource)} className="btn-ghost -ml-3">
             {showSource ? "Hide source" : "Show source"}
           </button>
         ) : <span />}
         {result ? (
-          <button onClick={props.onNext} className="rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong">
+          <button onClick={props.onNext} className="btn-primary">
             {number === total ? "See results" : "Next question"}
           </button>
         ) : null}
@@ -317,7 +334,7 @@ const SYMBOLS = ["∑", "∏", "√", "²", "³", "ⁿ", "≤", "≥", "≠", "�
 
 function SymbolBar({ onInsert, disabled }: { onInsert: (s: string) => void; disabled: boolean }) {
   return (
-    <div className="flex flex-wrap gap-1" aria-label="Insert a symbol">
+    <div className="flex flex-wrap gap-1.5" aria-label="Insert a symbol">
       {SYMBOLS.map((sym) => (
         <button
           key={sym}
@@ -325,7 +342,7 @@ function SymbolBar({ onInsert, disabled }: { onInsert: (s: string) => void; disa
           disabled={disabled}
           onMouseDown={(e) => e.preventDefault()} // keep the cursor in the answer box
           onClick={() => onInsert(sym)}
-          className="min-w-7 rounded-md bg-accent-soft px-1.5 py-0.5 font-serif text-[15px] hover:brightness-95 disabled:opacity-40"
+          className="chip min-w-8 justify-center px-2 font-serif text-[15px]"
           title={`Insert ${sym}`}
         >
           {sym}
@@ -338,25 +355,32 @@ function SymbolBar({ onInsert, disabled }: { onInsert: (s: string) => void; disa
 function Results({ items }: { items: QuizItemView[] }) {
   const correct = items.filter((q) => q.answered?.correct).length;
   return (
-    <div className="rounded-2xl border border-line bg-card p-5 shadow-sm">
-      <p className="text-xl font-semibold">
+    <div className="card appear p-6">
+      <p className="eyebrow">Quiz complete</p>
+      <p className="mt-2 font-serif text-[28px] font-semibold tracking-tight">
         You got {correct} of {items.length}
       </p>
-      <p className="mb-4 text-muted">
+      <p className="mt-1 text-muted">
         {correct === items.length ? "Nice work." : "Go back through the sources for the ones you missed."}
       </p>
-      <ol className="space-y-2">
+      <div className="mt-4 flex h-1.5 gap-1" aria-hidden>
         {items.map((q) => (
-          <li key={q.id} className="flex gap-2">
-            <span className={q.answered?.correct ? "text-good" : "text-bad"}>{q.answered?.correct ? "✓" : "✗"}</span>
-            <Rich text={q.question} className="min-w-0 flex-1 font-serif" />
+          <span key={q.id} className={`flex-1 rounded-full ${q.answered?.correct ? "bg-good" : "bg-bad"}`} />
+        ))}
+      </div>
+      <ol className="mt-6 divide-y divide-line">
+        {items.map((q) => (
+          <li key={q.id} className="flex items-start gap-3 py-3">
+            <span
+              className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white ${q.answered?.correct ? "bg-good" : "bg-bad"}`}
+            >
+              {q.answered?.correct ? "✓" : "✕"}
+            </span>
+            <Rich text={q.question} className="min-w-0 flex-1 font-serif text-[16px]" />
           </li>
         ))}
       </ol>
-      <button
-        onClick={() => void window.api.closeWindow()}
-        className="mt-5 rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong"
-      >
+      <button onClick={() => void window.api.closeWindow()} className="btn-primary mt-6">
         Done
       </button>
     </div>

@@ -12,6 +12,9 @@ import "./index.css";
 
 // One page, several screens: #/popover (menu bar), #/history, #/review/<session>[/summary|quiz], #/overlay, #/ask/<ask>.
 const [route, param, extra] = location.hash.replace(/^#\/?/, "").split("/");
+// A window reused for another screen (e.g. the review window opened again at the quiz) only changes the
+// hash, which doesn't reload the page: reload so the new screen shows.
+window.addEventListener("hashchange", () => location.reload());
 document.body.className = ["popover", "overlay", "ask"].includes(route) ? "bg-transparent" : "bg-paper";
 
 createRoot(document.getElementById("root")!).render(

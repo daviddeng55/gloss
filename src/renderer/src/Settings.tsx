@@ -5,27 +5,27 @@ import type { SettingsView } from "../../shared/types.ts";
 
 function Section({ title, children, note }: { title: string; children: ReactNode; note?: string }) {
   return (
-    <section className="mb-6 rounded-2xl border border-line bg-card p-5 shadow-sm">
-      <h2 className="text-xs font-bold tracking-widest text-accent uppercase">{title}</h2>
-      {note ? <p className="mt-1 text-[13px] text-muted">{note}</p> : null}
-      <div className="mt-3 space-y-3">{children}</div>
+    <section className="mb-8">
+      <h2 className="font-serif text-[19px] font-semibold tracking-tight">{title}</h2>
+      {note ? <p className="mt-1 text-[13px] leading-relaxed text-muted">{note}</p> : null}
+      <div className="card mt-3 space-y-4 p-6">{children}</div>
     </section>
   );
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <label className="flex items-center justify-between gap-4">
+    <label className="flex items-center justify-between gap-6">
       <span>
         <span className="font-medium">{label}</span>
-        {hint ? <span className="block text-xs text-muted">{hint}</span> : null}
+        {hint ? <span className="mt-0.5 block text-[12px] leading-snug text-muted">{hint}</span> : null}
       </span>
       {children}
     </label>
   );
 }
 
-const input = "rounded-lg border border-line bg-paper px-2 py-1 outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 selectable";
+const input = "field selectable h-8 py-1";
 
 function NumberInput({ value, onChange, min, max, suffix }: { value: number; onChange: (n: number) => void; min: number; max: number; suffix?: string }) {
   return (
@@ -43,9 +43,9 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (b: boolean) => void 
       role="switch"
       aria-checked={on}
       onClick={() => onChange(!on)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-line"}`}
+      className={`relative h-6 w-10 shrink-0 rounded-full transition-colors duration-150 ${on ? "bg-accent" : "bg-ink/15"}`}
     >
-      <span className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${on ? "left-5.5" : "left-0.5"}`} />
+      <span className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-all duration-150 ${on ? "left-4.5" : "left-0.5"}`} />
     </button>
   );
 }
@@ -72,7 +72,7 @@ function ListEditor({ items, onChange, placeholder }: { items: string[]; onChang
       onChange={(e) => onChange(e.target.value.split("\n"))}
       rows={Math.min(10, Math.max(3, items.length + 1))}
       placeholder={placeholder}
-      className={`${input} w-full font-mono text-[12px] leading-relaxed`}
+      className="field selectable w-full font-mono text-[12px] leading-relaxed"
     />
   );
 }
@@ -107,11 +107,11 @@ export default function Settings() {
     <div className="flex h-screen flex-col text-[14px] text-ink">
       <div className="drag h-12 shrink-0" />
       <div className="flex-1 overflow-y-auto px-8 pb-28">
-        <div className="mx-auto max-w-2xl">
-          <h1 className="mb-6 text-[28px] leading-tight font-bold tracking-tight">Settings</h1>
+        <div className="appear mx-auto max-w-2xl">
+          <h1 className="mb-8 font-serif text-[34px] leading-tight font-semibold tracking-tight">Settings</h1>
 
           <Section title="Rules for me" note="Gloss is a study partner, not a way around the rules.">
-            <ul className="list-disc space-y-1 pl-5 font-serif text-[16px]">
+            <ul className="list-disc space-y-1 pl-5 font-serif text-[16px] leading-relaxed">
               <li>Never start a session during a test, quiz or exam.</li>
               <li>Check each course's rules about AI tools, and follow them.</li>
             </ul>
@@ -126,19 +126,19 @@ export default function Settings() {
                   className={`${input} flex-1`}
                   placeholder="Course name, e.g. MATH 135"
                 />
-                <span className="flex items-center gap-2 text-[13px] text-muted">
+                <span className="flex items-center gap-2 text-[12px] text-muted">
                   Math <Toggle on={!!c.math} onChange={(b) => update((d) => void (d.courses[i].math = b))} />
                 </span>
                 <button
                   onClick={() => update((d) => void d.courses.splice(i, 1))}
-                  className="rounded px-2 text-muted hover:text-bad"
+                  className="btn-danger h-8 px-2"
                   title="Remove from the list (its sessions stay in History)"
                 >
                   ✕
                 </button>
               </div>
             ))}
-            <button onClick={() => update((d) => void d.courses.push({ id: "", name: "" }))} className="text-accent hover:underline">
+            <button onClick={() => update((d) => void d.courses.push({ id: "", name: "" }))} className="btn-secondary">
               + Add a course
             </button>
           </Section>
@@ -185,7 +185,13 @@ export default function Settings() {
           </Section>
 
           <Section title="AI models" note="Everything runs on your Mac through Ollama. Nothing is sent online.">
-            {s.aiProblem ? <p className="rounded-lg bg-bad/15 px-3 py-2">⚠︎ {s.aiProblem}</p> : <p className="text-good">✓ Ollama is running.</p>}
+            {s.aiProblem ? (
+              <p className="rounded-xl border border-bad/25 bg-bad/10 px-4 py-3">⚠︎ {s.aiProblem}</p>
+            ) : (
+              <p className="flex items-center gap-2 font-medium">
+                <span className="size-2 rounded-full bg-good" /> Ollama is running
+              </p>
+            )}
             <Row label="Summaries, quizzes and marking" hint="Runs after a session, in the background: a bigger model is slower but writes better quizzes.">
               <ModelPicker value={s.settings.ai.reviewModel} installed={s.installed ?? []} onChange={(m) => update((d) => void (d.settings.ai.reviewModel = m))} />
             </Row>
@@ -193,7 +199,7 @@ export default function Settings() {
               <ModelPicker value={s.settings.ai.askModel} installed={s.installed ?? []} onChange={(m) => update((d) => void (d.settings.ai.askModel = m))} />
             </Row>
             {s.models ? (
-              <ul className="space-y-1 text-[13px]">
+              <ul className="space-y-1 border-t border-line pt-4 text-[13px]">
                 <li>
                   <span className="text-muted">Math reader (math courses):</span> {s.models.math}
                 </li>
@@ -207,16 +213,12 @@ export default function Settings() {
         </div>
       </div>
 
-      <div className="absolute inset-x-0 bottom-0 border-t border-line bg-card/95 px-8 py-3 backdrop-blur">
+      <div className="absolute inset-x-0 bottom-0 border-t border-line bg-paper/85 px-8 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3">
           <p className={`text-[13px] ${status ? (status.ok ? "text-good" : "text-bad") : "text-muted"}`}>
             {status?.message ?? (dirty ? "Unsaved changes" : "All changes saved")}
           </p>
-          <button
-            onClick={() => void save()}
-            disabled={!dirty}
-            className="rounded-lg bg-accent px-5 py-1.5 font-semibold text-white hover:bg-accent-strong disabled:opacity-40"
-          >
+          <button onClick={() => void save()} disabled={!dirty} className="btn-primary px-6">
             Save
           </button>
         </div>

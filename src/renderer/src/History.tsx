@@ -54,24 +54,19 @@ export default function History() {
 
   return (
     <div className="flex h-screen text-[13px] text-ink">
-      <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-card">
+      <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-ink/[0.025]">
         <div className="drag h-12 shrink-0" />
-        <h1 className="px-4 pb-2 text-2xl font-bold tracking-tight">History</h1>
-        <button
-          onClick={() => void window.api.openLearn()}
-          className="mx-2 mb-1 rounded-lg px-2 py-1.5 text-left font-medium text-accent hover:bg-accent-soft"
-        >
+        <h1 className="px-4 pb-3 font-serif text-[26px] font-semibold tracking-tight">History</h1>
+        <button onClick={() => void window.api.openLearn()} className="btn-ghost mx-2 mb-2 justify-start px-2 text-ink">
           How you learn →
         </button>
         <nav className="flex-1 overflow-y-auto px-2 pb-4">
           {sessions === null ? null : sessions.length === 0 ? (
-            <p className="px-2 py-6 text-muted">
-              No sessions yet. Start one from the menu bar icon.
-            </p>
+            <p className="px-2 py-4 text-muted">Your sessions will appear here.</p>
           ) : (
             groups.map(([courseId, list]) => (
-              <section key={courseId} className="mt-3">
-                <h2 className="group flex items-center justify-between px-2 pb-1 text-[11px] font-bold tracking-widest text-accent uppercase">
+              <section key={courseId} className="mt-4">
+                <h2 className="eyebrow group flex h-6 items-center justify-between px-2">
                   {courseName(courseId)}
                   {state.status === "idle" || state.courseId !== courseId ? (
                     <button
@@ -83,7 +78,7 @@ export default function History() {
                           });
                         }
                       }}
-                      className="font-sans text-[11px] font-medium tracking-normal normal-case text-muted opacity-0 group-hover:opacity-100 hover:text-bad"
+                      className="rounded px-1 text-[11px] font-medium tracking-normal normal-case text-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 hover:text-bad"
                     >
                       Delete all
                     </button>
@@ -93,17 +88,18 @@ export default function History() {
                   <button
                     key={s.id}
                     onClick={() => setSelectedId(s.id)}
-                    className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left ${
-                      s.id === selectedId ? "bg-accent text-white" : "hover:bg-accent-soft"
+                    className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left transition-colors duration-150 ${
+                      s.id === selectedId ? "bg-accent-soft" : "hover:bg-hover"
                     }`}
                   >
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="font-medium">{dateFmt.format(new Date(s.startedAt))}</span>
-                      <span className={`text-xs tabular-nums ${s.id === selectedId ? "text-white/80" : "text-muted"}`}>
-                        {s.id === liveId ? (state.status === "paused" ? "Paused" : "● Recording") : duration(s.activeMs)}
+                      <span className="flex items-center gap-1.5 text-[12px] text-muted tabular-nums">
+                        {s.id === liveId && state.status !== "paused" ? <span className="size-1.5 rounded-full bg-accent" /> : null}
+                        {s.id === liveId ? (state.status === "paused" ? "Paused" : "Recording") : duration(s.activeMs)}
                       </span>
                     </span>
-                    <span className={`truncate text-xs ${s.id === selectedId ? "text-white/80" : "text-muted"}`}>
+                    <span className="truncate text-[12px] text-muted">
                       {timeFmt.format(new Date(s.startedAt))}
                       {s.goal ? ` · ${s.goal}` : ""}
                     </span>
@@ -117,7 +113,15 @@ export default function History() {
 
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="drag h-12 shrink-0" />
-        {detail ? (
+        {sessions?.length === 0 ? (
+          <div className="appear flex flex-1 flex-col items-center justify-center px-8 pb-16 text-center">
+            <p className="font-serif text-[24px] font-semibold tracking-tight">No sessions yet</p>
+            <p className="mt-2 max-w-sm leading-relaxed text-muted">
+              Start one from the menu bar: click the Gloss icon, then Start session. Your notes, summaries and quizzes
+              will collect here.
+            </p>
+          </div>
+        ) : detail ? (
           <SessionView
             s={detail}
             courseName={courseName(detail.courseId)}
@@ -138,9 +142,9 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
   const { s, courseName, live, onChanged } = props;
   const started = new Date(s.startedAt);
   return (
-    <div className="flex-1 overflow-y-auto px-8 pb-10">
-      <div className="max-w-3xl">
-      <header className="mb-6">
+    <div className="flex-1 overflow-y-auto px-8 pb-12">
+      <div key={s.id} className="appear max-w-3xl">
+      <header className="mb-8">
         {!live ? (
           <button
             onClick={() => {
@@ -148,32 +152,33 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
                 void window.api.deleteSession(s.id).then(props.onDeleted);
               }
             }}
-            className="float-right mt-1 rounded-lg px-2 py-1 text-sm text-muted hover:bg-bad/10 hover:text-bad"
+            className="btn-danger float-right mt-1"
           >
             Delete session
           </button>
         ) : null}
-        <h2 className="text-[26px] leading-tight font-bold tracking-tight">
-          {courseName} · {dateFmt.format(started)}
+        <p className="eyebrow">{courseName}</p>
+        <h2 className="mt-1 font-serif text-[30px] leading-tight font-semibold tracking-tight">
+          {dateFmt.format(started)}
         </h2>
-        <p className="mt-1 text-muted tabular-nums">
+        <p className="mt-2 text-muted tabular-nums">
           {timeFmt.format(started)}
           {s.endedAt ? `–${timeFmt.format(new Date(s.endedAt))}` : live ? " · recording now" : ""}
           {" · "}
           {duration(s.activeMs)} studied · {s.chunkCount} passage{s.chunkCount === 1 ? "" : "s"}
         </p>
         {s.goal ? (
-          <p className="selectable mt-3 rounded-lg bg-accent-soft/60 px-3 py-2">
-            <span className="font-medium">Goal:</span> {s.goal}
+          <p className="selectable mt-4 rounded-xl bg-hover px-4 py-3">
+            <span className="text-muted">Goal</span> <span className="ml-2 font-serif text-[15px]">{s.goal}</span>
           </p>
         ) : null}
         {!live && s.chunkCount > 0 ? (
-          <div className="mt-4 rounded-2xl border border-line bg-card p-4 shadow-sm">
+          <div className="card mt-6 p-6">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold">Summary &amp; quiz</h3>
-              <div className="flex items-center gap-3">
+              <h3 className="font-serif text-[18px] font-semibold">Summary &amp; quiz</h3>
+              <div className="flex items-center gap-2">
                 {s.quizScore ? (
-                  <span className="text-muted tabular-nums">
+                  <span className="mr-2 text-[13px] text-muted tabular-nums">
                     Quiz: {s.quizScore.correct}/{s.quizScore.total}
                   </span>
                 ) : null}
@@ -184,7 +189,7 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
                         void window.api.redoReview(s.id);
                       }
                     }}
-                    className="rounded-lg px-3 py-1 font-medium text-accent hover:bg-accent-soft"
+                    className="btn-ghost"
                     title="After removing passages, make the summary and quiz again"
                   >
                     Redo
@@ -192,44 +197,45 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
                 ) : null}
                 <button
                   onClick={() => void window.api.openReview(s.id)}
-                  className="rounded-lg bg-accent px-3 py-1 font-medium text-white hover:bg-accent-strong"
+                  className="btn-primary"
                 >
                   {s.summary ? "Open" : "Make summary & quiz"}
                 </button>
               </div>
             </div>
             {s.summary?.ok ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5">
+              <ul className="mt-4 space-y-3">
                 {s.summary.points.map((p, i) => (
-                  <li key={i}>
-                    <Rich text={plainMathToLatex(p.text)} className="font-serif" />
+                  <li key={i} className="flex gap-3">
+                    <span className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-accent" aria-hidden />
+                    <Rich text={plainMathToLatex(p.text)} className="min-w-0 flex-1 font-serif text-[15px]" />
                   </li>
                 ))}
               </ul>
             ) : s.summary ? (
-              <p className="mt-2 text-muted">{s.summary.reason}</p>
+              <p className="mt-3 text-muted">{s.summary.reason}</p>
             ) : null}
           </div>
         ) : null}
       </header>
 
       {s.questions.length ? (
-        <section className="mb-6">
-          <h3 className="mb-2 text-[11px] font-bold tracking-widest text-accent uppercase">
+        <section className="mb-8">
+          <h3 className="eyebrow mb-3">
             Questions you asked ({s.questions.length})
           </h3>
           <ul className="space-y-2">
             {s.questions.map((q) => (
               <li key={q.id}>
-                <details className="rounded-xl border border-line bg-card px-3 py-2">
-                  <summary className="cursor-pointer font-serif text-[15px]">
-                    <span className="mr-2 text-xs text-muted tabular-nums">{timeFmt.format(new Date(q.askedAt))}</span>
+                <details className="card rounded-xl px-4 py-3 shadow-none">
+                  <summary className="cursor-pointer font-serif text-[16px] transition-colors duration-150 hover:text-muted">
+                    <span className="mr-2 font-sans text-[12px] text-muted tabular-nums">{timeFmt.format(new Date(q.askedAt))}</span>
                     {q.question}
                   </summary>
-                  <div className="mt-2 space-y-3">
+                  <div className="mt-3 space-y-3 border-t border-line pt-3">
                     {q.answers.map((a, i) => (
                       <div key={i}>
-                        <p className="text-xs font-bold text-accent">{a.level}</p>
+                        <p className="eyebrow mb-1">{a.level}</p>
                         <Rich text={a.text} className="font-serif text-[15px]" />
                       </div>
                     ))}
@@ -241,8 +247,9 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
         </section>
       ) : null}
 
+      <h3 className="eyebrow mb-3">Captured text</h3>
       {s.chunks.length === 0 ? (
-        <p className="text-muted">
+        <p className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-muted">
           {live ? "Nothing saved yet — text appears here as you study." : "No text was saved in this session."}
         </p>
       ) : (
@@ -250,7 +257,7 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
           {s.chunks.map((c) => (
             <li key={c.id} className="group py-4 first:pt-0">
               <div className="mb-1 flex items-center gap-2">
-                <p className="min-w-0 flex-1 truncate text-xs text-muted">
+                <p className="min-w-0 flex-1 truncate text-[12px] text-muted">
                   <span className="tabular-nums">{timeFmt.format(new Date(c.capturedAt))}</span> · {c.sourceApp}
                   {c.sourceTitle ? ` — ${c.sourceTitle}` : ""}
                 </p>
@@ -260,7 +267,7 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
                       void window.api.deletePassage(c.id).then(onChanged);
                     }
                   }}
-                  className="rounded px-1.5 text-muted opacity-0 group-hover:opacity-100 hover:bg-red-500/15 hover:text-bad focus:opacity-100"
+                  className="rounded-md px-1.5 text-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 hover:bg-bad/10 hover:text-bad focus:opacity-100"
                   title="Remove this passage"
                   aria-label="Remove this passage"
                 >

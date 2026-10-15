@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/core", "src/cli", "src/shared", "src/main", "src/preload", "electron.vite.config.ts"]
+  "include": ["src/core", "src/cli", "src/shared", "src/main", "src/preload", "scripts", "electron.vite.config.ts"]
 }

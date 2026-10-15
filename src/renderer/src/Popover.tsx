@@ -121,7 +121,7 @@ export default function Popover() {
 
   if (found)
     return (
-      <div className="font-system">
+      <div>
         <FindDetail
           found={found}
           onBack={() => {
@@ -134,7 +134,7 @@ export default function Popover() {
 
   if (view === "start")
     return (
-      <div className="font-system">
+      <div>
         <StartView
           key={opened}
           onBack={() => {
@@ -146,19 +146,19 @@ export default function Popover() {
     );
 
   return (
-    <div className="font-system flex h-screen flex-col text-[13px] text-ink">
+    <div className="appear flex h-screen flex-col text-[13px] text-ink">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 pt-3.5 pb-3">
+      <header className="flex items-center justify-between px-4 pt-4 pb-3">
         <div className="flex items-center gap-2">
           <span className="relative flex size-2.5">
-            {s.status === "recording" ? <span className="absolute inset-0 animate-ping rounded-full bg-red-500/60" /> : null}
+            {s.status === "recording" ? <span className="absolute inset-0 animate-ping rounded-full bg-accent/50" /> : null}
             <span
-              className={`relative size-2.5 rounded-full ${
-                s.status === "recording" ? "bg-red-500" : s.status === "paused" ? "bg-amber-500" : "bg-muted/40"
+              className={`relative size-2.5 rounded-full transition-colors duration-200 ${
+                s.status === "recording" ? "bg-accent" : s.status === "paused" ? "bg-amber-500" : "bg-muted/35"
               }`}
             />
           </span>
-          <span className="text-[15px] font-semibold tracking-tight">Gloss</span>
+          <span className="font-serif text-[17px] font-semibold tracking-tight">Gloss</span>
         </div>
         <span className="truncate pl-4 text-[11px] text-muted">
           {s.status === "idle" ? "Not recording" : `${s.status === "paused" ? "Paused" : "Recording"} · ${s.courseName}`}
@@ -171,7 +171,7 @@ export default function Popover() {
           <button
             type="button"
             onClick={() => setView("start")}
-            className="h-12 w-full rounded-xl bg-accent text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-strong"
+            className="btn-primary h-11 w-full rounded-xl text-[14px] font-semibold"
           >
             Start session
           </button>
@@ -180,7 +180,7 @@ export default function Popover() {
             <button
               type="button"
               onClick={() => void window.api.endSession()}
-              className="flex h-12 flex-1 items-center justify-between rounded-xl bg-ink px-4 text-paper shadow-sm transition-opacity hover:opacity-90"
+              className="flex h-11 flex-1 items-center justify-between rounded-xl bg-ink px-4 text-paper shadow-sm transition-opacity duration-150 hover:opacity-90"
             >
               <span className="flex items-center gap-2 text-[14px] font-semibold">
                 {Icon.stop} End session
@@ -192,7 +192,7 @@ export default function Popover() {
               title={s.status === "paused" ? "Resume" : "Pause"}
               aria-label={s.status === "paused" ? "Resume" : "Pause"}
               onClick={() => void (s.status === "paused" ? window.api.resumeSession() : window.api.pauseSession())}
-              className="flex size-12 items-center justify-center rounded-xl bg-ink/[0.07] transition-colors hover:bg-ink/[0.12]"
+              className="flex size-11 items-center justify-center rounded-xl bg-hover transition-colors duration-150 hover:bg-ink/10"
             >
               {s.status === "paused" ? Icon.play : Icon.pause}
             </button>
@@ -202,7 +202,7 @@ export default function Popover() {
 
       {/* Find it */}
       <div className="px-4 pt-3">
-        <label className="flex items-center gap-2 rounded-lg bg-ink/[0.06] px-2.5 py-1.5 text-muted transition-shadow focus-within:ring-2 focus-within:ring-accent/30">
+        <label className="flex h-9 items-center gap-2 rounded-lg border border-line bg-card/60 px-3 text-muted transition-shadow duration-150 focus-within:border-accent/50 focus-within:ring-3 focus-within:ring-accent/20">
           {Icon.search}
           <input
             ref={searchRef}
@@ -220,15 +220,18 @@ export default function Popover() {
         <FindResults query={query} onOpen={(m) => void openFound(m, query).then(setFound)} />
       ) : (
         <section className="flex-1 overflow-y-auto px-2 pt-3">
-          <h2 className="px-2 pb-1 text-[11px] font-medium text-muted">Recent sessions</h2>
+          <h2 className="eyebrow px-2 pb-2">Recent sessions</h2>
           {sessions.length === 0 ? (
-            <p className="px-2 pt-1 text-muted">No sessions yet. Start one above.</p>
+            <div className="appear mx-2 mt-2 rounded-xl border border-dashed border-line px-4 py-6 text-center">
+              <p className="font-serif text-[15px]">No sessions yet</p>
+              <p className="mt-1 text-[12px] text-muted">Press Start session when you sit down to study.</p>
+            </div>
           ) : (
             <ul>
               {sessions.map((x) => {
                 const live = s.status !== "idle" && s.sessionId === x.id;
                 return (
-                  <li key={x.id} className="flex items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-ink/[0.05]">
+                  <li key={x.id} className="flex items-center gap-3 rounded-lg px-2 py-2 transition-colors duration-150 hover:bg-hover">
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">
                         {courseName(x.courseId)}
@@ -247,7 +250,7 @@ export default function Popover() {
                             disabled={x.chunkCount === 0}
                             title={x.chunkCount === 0 ? "Nothing was captured in this session" : undefined}
                             onClick={() => void window.api.openReview(x.id, section)}
-                            className="rounded-md bg-ink/[0.06] px-2 py-1 text-[11px] font-medium transition-colors hover:bg-ink/[0.12] disabled:opacity-40 disabled:hover:bg-ink/[0.06]"
+                            className="rounded-md border border-line bg-card/70 px-2 py-1 text-[11px] font-medium transition-colors duration-150 hover:bg-hover disabled:opacity-40"
                           >
                             {section === "summary" ? "Summary" : "Quiz"}
                           </button>
@@ -263,9 +266,9 @@ export default function Popover() {
       )}
 
       {/* Footer */}
-      <footer className="flex items-center justify-between border-t border-ink/[0.08] px-4 py-2.5">
-        <button type="button" onClick={() => void window.api.openHistory()} className="font-medium text-accent hover:text-accent-strong">
-          See all sessions
+      <footer className="flex items-center justify-between border-t border-line px-2 py-2">
+        <button type="button" onClick={() => void window.api.openHistory()} className="btn-ghost h-7 px-2 font-medium text-ink">
+          See all sessions →
         </button>
         <div className="flex items-center gap-1">
           <button
@@ -273,14 +276,14 @@ export default function Popover() {
             title="Settings"
             aria-label="Settings"
             onClick={() => void window.api.openSettings()}
-            className="flex size-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-ink/[0.07] hover:text-ink"
+            className="flex size-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-hover hover:text-ink"
           >
             {Icon.gear}
           </button>
           <button
             type="button"
             onClick={() => void window.api.quit()}
-            className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-ink/[0.07] hover:text-ink"
+            className="btn-ghost h-7 px-2"
           >
             Quit
           </button>

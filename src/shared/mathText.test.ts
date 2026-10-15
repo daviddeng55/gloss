@@ -20,3 +20,8 @@ test("ordinary text and existing LaTeX are left alone", () => {
     assert.equal(plainMathToLatex(s), s);
   }
 });
+
+test("bracketed exponents and subscripts are raised or lowered whole", () => {
+  assert.equal(plainMathToLatex("2^(k-1) < 2^(k+1)"), "$2^{k-1}$ < $2^{k+1}$");
+  assert.equal(plainMathToLatex("f_(k+1) = f_k + f_(k-1)"), "$f_{k+1}$ = $f_{k}$ + $f_{k-1}$");
+});

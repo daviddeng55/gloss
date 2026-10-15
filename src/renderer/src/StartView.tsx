@@ -50,14 +50,14 @@ export default function StartView({ onBack }: { onBack: () => void }) {
       }}
     >
       <div className="flex flex-col gap-1">
-        <button type="button" onClick={onBack} className="self-start font-medium text-accent hover:text-accent-strong">
+        <button type="button" onClick={onBack} className="btn-ghost -ml-3 h-7 self-start px-3">
           ← Back
         </button>
-        <h1 className="text-[15px] font-semibold">Start a study session</h1>
+        <h1 className="font-serif text-[20px] font-semibold tracking-tight">Start a study session</h1>
       </div>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-xs font-medium text-muted">Course</legend>
+        <legend className="eyebrow mb-2">Course</legend>
         <div className="grid grid-cols-2 gap-1.5">
           {courses.map((c) => (
             <button
@@ -67,10 +67,10 @@ export default function StartView({ onBack }: { onBack: () => void }) {
                 setCourseId(c.id);
                 goalRef.current?.focus();
               }}
-              className={`rounded-lg px-3 py-2 text-left font-medium transition-colors ${
+              className={`rounded-lg border px-3 py-2 text-left font-medium transition-colors duration-150 ${
                 c.id === courseId
-                  ? "bg-accent text-white"
-                  : "bg-accent-soft/70 hover:bg-accent-soft"
+                  ? "border-accent/50 bg-accent-soft text-ink"
+                  : "border-line bg-card/60 hover:bg-hover"
               }`}
               aria-pressed={c.id === courseId}
             >
@@ -81,7 +81,7 @@ export default function StartView({ onBack }: { onBack: () => void }) {
       </fieldset>
 
       <label className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-muted">Goal (optional)</span>
+        <span className="eyebrow">Goal (optional)</span>
         <input
           ref={goalRef}
           autoFocus
@@ -89,12 +89,12 @@ export default function StartView({ onBack }: { onBack: () => void }) {
           maxLength={200}
           onChange={(e) => setGoal(e.target.value)}
           placeholder="e.g. finish induction practice problems"
-          className="selectable rounded-xl border border-line bg-card/80 px-3 py-2 outline-none placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/25"
+          className="field selectable h-9"
         />
       </label>
 
       {problem?.reason === "permission" ? (
-        <div className="flex flex-col gap-2 rounded-lg bg-amber-500/15 p-3 text-[12px] leading-snug">
+        <div className="flex flex-col gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[12px] leading-snug">
           <p className="font-medium">{problem.message}</p>
           <ol className="list-decimal space-y-1 pl-4">
             <li>
@@ -106,20 +106,20 @@ export default function StartView({ onBack }: { onBack: () => void }) {
           <button
             type="button"
             onClick={() => void window.api.openScreenRecordingSettings()}
-            className="self-start rounded-md bg-amber-600 px-2.5 py-1 font-medium text-white hover:bg-amber-700"
+            className="btn-secondary self-start"
           >
             Open System Settings
           </button>
         </div>
       ) : problem ? (
-        <p className="rounded-lg bg-red-500/15 p-3 text-[12px]">{problem.message}</p>
+        <p className="rounded-xl border border-bad/25 bg-bad/10 p-3 text-[12px]">{problem.message}</p>
       ) : null}
 
       <div className="mt-auto flex flex-col gap-2">
         <button
           type="submit"
           disabled={!selected || starting}
-          className="rounded-lg bg-accent py-2 font-semibold text-white hover:bg-accent-strong disabled:opacity-40"
+          className="btn-primary h-11 rounded-xl text-[14px] font-semibold"
         >
           {starting ? "Starting…" : selected ? `Start ${selected.name}` : "Choose a course"}
         </button>

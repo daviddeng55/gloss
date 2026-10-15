@@ -1,36 +1,44 @@
 @import "tailwindcss";
 
 /*
- * "Study notebook" look: rounded type for headings and controls, a book-style serif for anything
- * you read (notes, summaries, questions), warm paper colours and a terracotta accent.
- * Fonts are built into macOS (".SF NS Rounded" = SF Pro Rounded, ".New York" = New York), with fallbacks.
+ * "Calm study desk": SF Pro for the interface, Apple's New York serif for headings and anything you
+ * read (summaries, questions, notes), soft off-white / deep charcoal surfaces, and one indigo accent used
+ * only for primary buttons, highlights and the recording dot.
+ * Every colour is a token below; components use the Tailwind names (bg-card, text-muted, …).
+ * Spacing follows Tailwind's 4 px steps: 1 = 4, 2 = 8, 3 = 12, 4 = 16, 6 = 24, 8 = 32.
  */
 @theme {
-  --font-sans: ".SF NS Rounded", "Avenir Next", system-ui, sans-serif;
-  --font-serif: ".New York", "Iowan Old Style", Charter, Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-serif: ".New York", "New York", "Iowan Old Style", Charter, Georgia, serif;
   --color-paper: var(--paper);
   --color-card: var(--card);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-line: var(--line);
+  --color-hover: var(--hover);
   --color-accent: var(--accent);
   --color-accent-strong: var(--accent-strong);
   --color-accent-soft: var(--accent-soft);
   --color-good: var(--good);
   --color-bad: var(--bad);
+  --shadow-card: var(--card-shadow);
+  --shadow-pop: var(--pop-shadow);
 }
 
 :root {
-  --paper: #f7f3ec;
-  --card: #fffdf9;
-  --ink: #2b2620;
-  --muted: #7a6f63;
-  --line: #e6ddd0;
-  --accent: #c0532b;
-  --accent-strong: #a3431f;
-  --accent-soft: #f6e3d8;
-  --good: #3f7d4e;
-  --bad: #b3412f;
+  --paper: #fafaf7; /* window background */
+  --card: #ffffff;
+  --ink: #1c1c1e; /* text */
+  --muted: #6e6e73; /* secondary text */
+  --line: rgb(28 28 30 / 0.09); /* hairline borders */
+  --hover: rgb(28 28 30 / 0.045); /* hover tint on anything clickable */
+  --accent: #5b5bd6; /* indigo */
+  --accent-strong: #4c4cc4; /* indigo, pressed / hovered */
+  --accent-soft: rgb(91 91 214 / 0.11); /* highlights */
+  --good: #30a46c;
+  --bad: #e5484d;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 6px 20px -8px rgb(0 0 0 / 0.08);
+  --pop-shadow: 0 8px 30px -10px rgb(0 0 0 / 0.18);
   font-family: var(--font-sans);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
@@ -40,22 +48,77 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #1d1a17;
-    --card: #282420;
-    --ink: #eee7dc;
-    --muted: #a3988a;
-    --line: #3a342d;
-    --accent: #e0794f;
-    --accent-strong: #ec8c63;
-    --accent-soft: #3d2a20;
-    --good: #7cbf8a;
-    --bad: #e37b68;
+    --paper: #1c1c1e;
+    --card: #2c2c2e;
+    --ink: #f5f5f7;
+    --muted: #98989d;
+    --line: rgb(255 255 255 / 0.09);
+    --hover: rgb(255 255 255 / 0.06);
+    --accent-strong: #6b6be0;
+    --accent-soft: rgb(91 91 214 / 0.24);
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+    --pop-shadow: 0 8px 30px -10px rgb(0 0 0 / 0.6);
   }
 }
 
-/* The menu bar popover uses the plain system font. */
-.font-system {
-  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+/* A content card: soft corners, hairline border, very soft shadow. */
+@utility card {
+  @apply rounded-2xl border border-line bg-card shadow-card;
+}
+/* Small uppercase label above a section. */
+@utility eyebrow {
+  @apply text-[11px] font-semibold tracking-[0.06em] text-muted uppercase;
+}
+@utility btn {
+  @apply inline-flex h-8 items-center justify-center gap-2 rounded-lg px-4 text-[13px] font-medium whitespace-nowrap transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40;
+}
+@utility btn-primary {
+  @apply btn bg-accent text-white shadow-sm hover:bg-accent-strong;
+}
+@utility btn-secondary {
+  @apply btn border border-line bg-card text-ink hover:bg-hover;
+}
+@utility btn-ghost {
+  @apply btn px-3 text-muted hover:bg-hover hover:text-ink;
+}
+@utility btn-danger {
+  @apply btn px-3 text-muted hover:bg-bad/10 hover:text-bad;
+}
+/* Text inputs and selects. */
+@utility field {
+  @apply rounded-lg border border-line bg-card px-3 py-1.5 text-ink outline-none transition-shadow duration-150 placeholder:text-muted focus:border-accent/60 focus:ring-3 focus:ring-accent/20;
+}
+/* Small pill button (sources, hint levels, symbols). */
+@utility chip {
+  @apply inline-flex items-center rounded-full bg-hover px-2.5 py-0.5 text-[12px] text-ink transition-colors duration-150 hover:bg-ink/10 disabled:opacity-40;
+}
+/* Content that appears: a quick fade and a 4 px slide up. */
+@utility appear {
+  animation: appear 180ms ease-out both;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .appear {
+    animation: none;
+  }
+}
+
+/* Keyboard focus is always visible, in the accent colour. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none; /* .field draws its own ring */
 }
 
 /* Text you might want to copy (notes, goals) stays selectable. */
@@ -64,7 +127,7 @@
   cursor: text;
 }
 
-/* Drag the History window by its top bar (the title bar is hidden). */
+/* Drag windows by their top bar (the title bar is hidden). */
 .drag {
   -webkit-app-region: drag;
 }
@@ -75,16 +138,16 @@
 /* Text rendered by <Rich>: notes, summaries, questions. */
 .rich > :first-child { margin-top: 0; }
 .rich > :last-child { margin-bottom: 0; }
-.rich p { margin: 0.5em 0; line-height: 1.6; }
-.rich .katex { font-size: 1.08em; }
+.rich p { margin: 0.5em 0; line-height: 1.65; }
+.rich .katex { font-size: 1.06em; }
 /* Tailwind sizes every box with "border-box"; KaTeX's layout assumes "content-box". (The big fraction-bar
    bug was a KaTeX version mismatch: keep `katex` on the same version rehype-katex uses — see `npm ls katex`.) */
 .katex, .katex * { box-sizing: content-box; }
 .rich ul, .rich ol { margin: 0.5em 0; padding-left: 1.4em; }
 .rich ul { list-style: disc; }
 .rich ol { list-style: decimal; }
-.rich code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; padding: 0.1em 0.3em; border-radius: 4px; background: var(--accent-soft); }
-.rich pre { margin: 0.6em 0; padding: 0.75em 1em; border-radius: 10px; overflow-x: auto; background: var(--paper); border: 1px solid var(--line); }
+.rich li { line-height: 1.65; }
+.rich code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.86em; padding: 0.1em 0.35em; border-radius: 5px; background: var(--hover); }
+.rich pre { margin: 0.75em 0; padding: 0.75em 1em; border-radius: 12px; overflow-x: auto; background: var(--paper); border: 1px solid var(--line); }
 .rich pre code { padding: 0; background: none; }
-.rich .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
-
+.rich .katex-display { margin: 0.75em 0; overflow-x: auto; overflow-y: hidden; }

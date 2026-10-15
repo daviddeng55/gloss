@@ -22,6 +22,8 @@ function toLatex(token: string): string {
     .replace(/≤/g, "\\le ")
     .replace(/≥/g, "\\ge ")
     .replace(/≠/g, "\\ne ")
+    .replace(/\^\(([^()]*)\)/g, "^{$1}") // 2^(k-1): the whole bracket is the exponent
+    .replace(/_\(([^()]*)\)/g, "_{$1}") // f_(k+1)
     .replace(/\^(\w)/g, "^{$1}")
     .replace(/_(\w)(?!\})/g, "_{$1}");
 }

@@ -83,18 +83,18 @@ export default function Ask({ askId }: { askId: string }) {
   return (
     <div className="flex h-screen flex-col bg-paper/95 text-[14px] text-ink">
       <div className="drag h-10 shrink-0" />
-      <div className="flex-1 overflow-y-auto px-5 pb-4">
-        <p className="mb-2 text-xs font-bold tracking-widest text-accent uppercase">
+      <div className="appear flex-1 overflow-y-auto px-6 pb-4">
+        <p className="eyebrow mb-3">
           Ask · {info.courseName}
         </p>
         <button
           onClick={() => setBigImage(!bigImage)}
-          className="group mb-1 block w-full overflow-hidden rounded-xl border border-line bg-card"
+          className="group mb-2 block w-full overflow-hidden rounded-xl border border-line bg-card transition-shadow duration-150 hover:shadow-card"
           title={bigImage ? "Show smaller" : "Show bigger"}
         >
           <img src={info.thumbnail} alt="What was sent" className={`w-full object-contain ${bigImage ? "" : "max-h-36"}`} />
         </button>
-        <p className="mb-4 text-xs text-muted">
+        <p className="mb-6 text-[12px] text-muted">
           {info.circled ? "What you circled" : "Around your cursor"} — exactly what's sent to the AI on your Mac.
         </p>
 
@@ -119,15 +119,11 @@ export default function Ask({ askId }: { askId: string }) {
               }}
               rows={3}
               placeholder="What do you want to know about this?"
-              className="selectable rounded-xl border border-line bg-card px-3 py-2 font-serif text-[16px] outline-none placeholder:font-sans placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/25"
+              className="field selectable rounded-xl px-4 py-3 font-serif text-[17px] leading-relaxed placeholder:font-sans placeholder:text-[14px]"
             />
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted">Enter to ask · Shift+Enter for a new line · Esc to close</span>
-              <button
-                type="submit"
-                disabled={!question.trim()}
-                className="rounded-lg bg-accent px-4 py-1.5 font-semibold text-white hover:bg-accent-strong disabled:opacity-40"
-              >
+              <span className="text-[12px] text-muted">Enter to ask · Shift+Enter for a new line · Esc to close</span>
+              <button type="submit" disabled={!question.trim()} className="btn-primary">
                 Ask
               </button>
             </div>
@@ -150,36 +146,36 @@ export default function Ask({ askId }: { askId: string }) {
                     setEditing(false);
                   }
                 }}
-                className="selectable rounded-xl border border-accent bg-card px-3 py-2 font-serif text-[16px] outline-none ring-2 ring-accent/25"
+                className="field selectable rounded-xl px-4 py-3 font-serif text-[17px]"
               />
             ) : (
               <button
                 onClick={() => !busy && setEditing(true)}
-                className="group rounded-xl bg-accent-soft/60 px-3 py-2 text-left font-serif text-[16px]"
+                className="group rounded-xl bg-hover px-4 py-3 text-left font-serif text-[17px] transition-colors duration-150 hover:bg-ink/10"
                 title="Edit your question and ask again"
               >
                 {asked}
-                <span className="ml-2 font-sans text-xs text-accent opacity-0 group-hover:opacity-100">Edit</span>
+                <span className="ml-2 font-sans text-[12px] text-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100">Edit</span>
               </button>
             )}
             {waiting ? (
-              <p className="flex items-center gap-2 rounded-2xl border border-line bg-card p-4 text-muted shadow-sm">
+              <p className="card appear flex items-center gap-3 px-6 py-4 text-muted">
                 <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
                 Waiting for the AI to finish what it's doing…
               </p>
             ) : null}
             {turns.map((t, i) => (
-              <div key={i} className="rounded-2xl border border-line bg-card p-4 shadow-sm">
-                <p className="text-xs font-bold tracking-wide text-accent">
+              <div key={i} className="card appear p-6">
+                <p className="eyebrow">
                   {LEVELS.find((l) => l.id === t.level)?.label}
                   {t.concept ? <span className="font-medium text-muted"> · {t.concept}</span> : null}
                 </p>
-                {t.reason ? <p className="mt-0.5 text-xs text-muted italic">{t.reason}</p> : null}
-                <div className="mb-2" />
+                {t.reason ? <p className="mt-1 text-[12px] text-muted italic">{t.reason}</p> : null}
+                <div className="mb-3" />
                 {t.status === "error" ? (
                   <p className="text-bad">{t.text}</p>
                 ) : t.text ? (
-                  <Rich text={t.text} className="font-serif text-[16px]" />
+                  <Rich text={t.text} className="font-serif text-[17px]" />
                 ) : (
                   <p className="flex items-center gap-2 text-muted">
                     <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -187,7 +183,7 @@ export default function Ask({ askId }: { askId: string }) {
                   </p>
                 )}
                 {t.sources?.length && t.status !== "error" ? (
-                  <p className="mt-3 border-t border-line pt-2 text-xs text-muted">
+                  <p className="mt-4 border-t border-line pt-3 text-[12px] text-muted">
                     Sources: {t.sources.map((s) => `${s.when} — ${s.title}`).join(" · ")}
                   </p>
                 ) : null}
@@ -199,15 +195,15 @@ export default function Ask({ askId }: { askId: string }) {
       </div>
 
       {asked ? (
-        <div className="shrink-0 border-t border-line bg-card/80 px-5 py-3">
-          <p className="mb-2 text-xs text-muted">Need more help?</p>
+        <div className="shrink-0 border-t border-line bg-paper/85 px-6 py-3 backdrop-blur-xl">
+          <p className="eyebrow mb-2">Need more help?</p>
           <div className="flex flex-wrap gap-2">
             {LEVELS.map((l) => (
               <button
                 key={l.id}
                 disabled={busy}
                 onClick={() => send(l.id)}
-                className="rounded-full border border-line bg-paper px-3 py-1 text-[13px] font-medium hover:bg-accent-soft disabled:opacity-40"
+                className="btn-secondary h-7 rounded-full px-3"
               >
                 {l.label}
               </button>

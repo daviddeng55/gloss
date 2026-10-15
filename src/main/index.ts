@@ -278,7 +278,7 @@ const POPOVER = { width: 360, height: 480 };
 let popoverView: PopoverView = "home";
 let popoverHiddenAt = 0;
 // Development checks take screenshots of the popover while other windows are open.
-const keepPopoverOpen = !!(process.env.GLOSS_SMOKE || process.env.GLOSS_SMOKE_FIND);
+const keepPopoverOpen = !!(process.env.GLOSS_SMOKE || process.env.GLOSS_SMOKE_FIND || process.env.GLOSS_SMOKE_DESIGN);
 
 /** Made (hidden) when the app starts, so it opens instantly. */
 function createPopover() {
@@ -351,7 +351,7 @@ function showHistory() {
       show: false,
       title: "Gloss — History",
       titleBarStyle: "hiddenInset",
-      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#ffffff",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#fafaf7",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
     });
     history.on("closed", () => (history = null));
@@ -374,7 +374,7 @@ function openLearn() {
       show: false,
       title: "Gloss — How You Learn",
       titleBarStyle: "hiddenInset",
-      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#fafaf7",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
     });
     learnWin.on("closed", () => (learnWin = null));
@@ -397,7 +397,7 @@ function openSettings() {
       show: false,
       title: "Gloss — Settings",
       titleBarStyle: "hiddenInset",
-      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#fafaf7",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
     });
     settingsWin.on("closed", () => (settingsWin = null));
@@ -454,7 +454,7 @@ function openWarmup(sessionId: string) {
     title: "Gloss — Warm-up",
     titleBarStyle: "hiddenInset",
     alwaysOnTop: true,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? "#1d1a17" : "#f7f3ec",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#fafaf7",
     webPreferences: { preload, sandbox: true, contextIsolation: true },
   });
   warmupWin.on("closed", () => (warmupWin = null));
@@ -473,7 +473,7 @@ function openReview(sessionId: string, section?: "summary" | "quiz") {
       show: false,
       title: "Gloss — Review",
       titleBarStyle: "hiddenInset",
-      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#ffffff",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#fafaf7",
       webPreferences: { preload, sandbox: true, contextIsolation: true },
     });
     reviewWin.on("closed", () => (reviewWin = null));
@@ -687,6 +687,7 @@ app.whenReady().then(() => {
   if (process.env.GLOSS_SMOKE_ASK) void smokeAsk(process.env.GLOSS_SMOKE_ASK);
   if (process.env.GLOSS_SMOKE_LEARN) void smokeLearn(process.env.GLOSS_SMOKE_LEARN);
   if (process.env.GLOSS_SMOKE_FIND) void smokeFind(process.env.GLOSS_SMOKE_FIND);
+  if (process.env.GLOSS_SMOKE_DESIGN) void smokeDesign(process.env.GLOSS_SMOKE_DESIGN);
   // Development checks: show errors from every window in the terminal.
   if (process.env.GLOSS_DB) {
     app.on("web-contents-created", (_e, wc) =>
@@ -765,6 +766,91 @@ async function smokeFind(dir: string) {
   await wait(800);
   writeFileSync(join(dir, "find-detail.png"), (await popup!.webContents.capturePage()).toPNG());
   console.log("SMOKE find detail:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
+  app.quit();
+}
+
+/**
+ * Design check: opens every screen in turn and saves a screenshot of each to `dir`, named
+ * <screen>-<GLOSS_THEME>.png. Use a demo database (scripts/seed-demo-db.ts), or an empty one for the
+ * empty states (GLOSS_SMOKE_EMPTY=1 then only captures the screens that have one).
+ */
+async function smokeDesign(dir: string) {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const theme = process.env.GLOSS_THEME ?? "system";
+  const empty = !!process.env.GLOSS_SMOKE_EMPTY;
+  const shot = async (win: BrowserWindow, name: string) => {
+    writeFileSync(join(dir, `${name}-${theme}.png`), (await win.webContents.capturePage()).toPNG());
+    console.log(`SMOKE design: ${name}-${theme}.png`);
+  };
+  const js = (win: BrowserWindow, code: string) => win.webContents.executeJavaScript(code);
+  // The popover's frosted background isn't in screenshots; paint a plain one instead, for these only.
+  const opaque = async (win: BrowserWindow) => {
+    await win.webContents.insertCSS("body { background: var(--paper) !important; }");
+    await wait(300);
+  };
+  const type = (win: BrowserWindow, text: string) =>
+    js(win, `(() => { const i = document.querySelector("input");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, ${JSON.stringify(text)});
+      i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+
+  showPopover();
+  await wait(2500);
+  await opaque(popup!);
+  await shot(popup!, empty ? "popover-empty" : "popover");
+  if (!empty) {
+    showPopover("start");
+    await wait(500);
+    await shot(popup!, "popover-start");
+    showPopover("find");
+    await wait(300);
+    await type(popup!, "induction");
+    await wait(600);
+    await shot(popup!, "popover-find");
+    await js(popup!, `document.querySelector("[data-result]")?.click()`);
+    await wait(600);
+    await shot(popup!, "popover-find-detail");
+  }
+  popup!.hide();
+
+  showHistory();
+  await wait(2500);
+  await shot(history!, empty ? "history-empty" : "history");
+  history!.close();
+
+  if (!empty) {
+    const sessions = db.listSessions();
+    const main = sessions.find((x) => x.goal === "Strong induction practice") ?? sessions[0];
+    openReview(main.id);
+    await wait(2500);
+    await shot(reviewWin!, "summary");
+    openReview(main.id, "quiz");
+    await wait(2500);
+    await shot(reviewWin!, "quiz");
+    // Answer the current question wrongly, to show the marked state.
+    await js(reviewWin!, `(() => { const b = [...document.querySelectorAll("[data-option]")]; b[b.length - 1]?.click(); })()`);
+    await wait(1200);
+    await shot(reviewWin!, "quiz-answered");
+    reviewWin!.close();
+
+    openWarmup(main.id);
+    await wait(2500);
+    if (warmupWin) {
+      await shot(warmupWin, "warmup");
+      warmupWin.close();
+    }
+  }
+
+  openLearn();
+  await wait(2500);
+  await shot(learnWin!, empty ? "learn-empty" : "learn");
+  learnWin!.close();
+
+  if (!empty) {
+    openSettings();
+    await wait(2500);
+    await shot(settingsWin!, "settings");
+    settingsWin!.close();
+  }
   app.quit();
 }
 
