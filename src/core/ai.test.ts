@@ -146,7 +146,7 @@ test("quiz answers update the score and spaced review", () => {
 });
 
 test("a question you ask goes ahead of background AI work that is still waiting", async () => {
-  const cfg = { baseUrl: "http://127.0.0.1:9", model: "test" }; // nothing listens there: unloading is skipped
+  const cfg = { model: "test" }; // tests use a pretend provider: nothing is loaded or unloaded
   const order: string[] = [];
   let release: (() => void) | undefined;
   const running = withModel(cfg, () => new Promise<void>((r) => (release = r)).then(() => void order.push("running")));

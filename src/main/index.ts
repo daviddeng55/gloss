@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
 import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
+import { provider } from "../core/provider.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
 import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
@@ -559,13 +560,7 @@ function registerIpc() {
   ipcMain.handle("app:quit", () => app.quit());
   ipcMain.handle("settings:get", async () => {
     // Downloaded models that can tutor (not the math reader or the embedding model).
-    let installed: string[] = [];
-    try {
-      const tags = (await (await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) })).json()) as { models?: { name: string }[] };
-      installed = (tags.models ?? []).map((m) => m.name).filter((n) => !/glm-ocr|embed/i.test(n)).sort();
-    } catch {
-      /* Ollama not running */
-    }
+    const installed = ((await provider().models()) ?? []).filter((n) => !/glm-ocr|embed/i.test(n)).sort();
     return { ...readAllSettings(), models: { math: "glm-ocr:q8_0", memory: "embeddinggemma" }, installed, aiProblem };
   });
   ipcMain.handle("settings:save", (_e, b: unknown) => saveAllSettings(b as SettingsBundle));

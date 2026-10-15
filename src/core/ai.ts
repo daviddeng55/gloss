@@ -5,11 +5,16 @@
 //   transcribeMath()    — re-reads math-heavy lines from a screenshot (Apple's OCR mangles math)
 //   askAboutImage()     — Stage 4
 //   embed()             — Stage 5
+// The calls themselves go through the active ModelProvider (provider.ts), so where the models run can change.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { AiError, KEEP_ALIVE, provider, type ChatMessage } from "./provider.ts";
 
-export type AiConfig = { baseUrl: string; model: string };
-export const DEFAULT_AI: AiConfig = { baseUrl: "http://localhost:11434", model: "qwen3.5:4b" };
+export { AiError, KEEP_ALIVE };
+
+/** Which model a call uses (the provider decides where it runs). */
+export type AiConfig = { model: string };
+export const DEFAULT_AI: AiConfig = { model: "qwen3.5:4b" };
 
 /** Rules included in every prompt (PRD section 9). */
 export const TUTOR_RULES = `You are a study partner for a university student. Rules:
@@ -20,41 +25,15 @@ export const TUTOR_RULES = `You are a study partner for a university student. Ru
 - For math: show algebra one step per line and write division as stacked fractions with LaTeX \\frac{a}{b}, not a/b. Write math in LaTeX between $...$.
 - The material was read from the screen by text recognition and may contain misread symbols. If it is unclear or doesn't contain the answer, say so. Never make things up.`;
 
-export class AiError extends Error {
-  readonly code: "not-running" | "model-missing" | "bad-output" | "failed";
-  constructor(code: AiError["code"], message: string) {
-    super(message);
-    this.code = code;
-  }
-}
-
-type Message = { role: "system" | "user" | "assistant"; content: string; images?: string[] };
+type Message = ChatMessage;
 
 // ---------- one model at a time ----------
-
-/** How long Ollama keeps a model in memory after its last use. */
-export const KEEP_ALIVE = "3m";
 
 type Job = { cfg: AiConfig; urgent: boolean; run: () => Promise<void> };
 const waiting: Job[] = [];
 let running = false;
 let currentModel: string | null = null;
 const urgentWork = new AsyncLocalStorage<boolean>();
-
-/** Unloads every loaded model except `keep` (Ollama frees a model when asked with keep_alive 0). */
-async function unloadOthers(baseUrl: string, keep: string) {
-  const ps = (await (await fetch(`${baseUrl}/api/ps`, { signal: AbortSignal.timeout(3000) })).json()) as {
-    models?: { name: string }[];
-  };
-  for (const m of ps.models ?? []) {
-    if (m.name === keep) continue;
-    await fetch(`${baseUrl}/api/generate`, {
-      method: "POST",
-      body: JSON.stringify({ model: m.name, keep_alive: 0 }),
-      signal: AbortSignal.timeout(10_000),
-    });
-  }
-}
 
 /**
  * Runs AI work one request at a time, and never with two models in memory: switching to another
@@ -86,7 +65,7 @@ async function runWaiting() {
   while (waiting.length) {
     const job = waiting.shift()!;
     if (currentModel !== job.cfg.model) {
-      await unloadOthers(job.cfg.baseUrl, job.cfg.model).catch(() => {});
+      await provider().unloadOthers(job.cfg.model).catch(() => {});
       currentModel = job.cfg.model;
     }
     await job.run();
@@ -106,34 +85,7 @@ async function chatNow<T>(
   cfg: AiConfig,
   req: { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number },
 ): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${cfg.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(req.timeoutMs ?? 180_000),
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: req.messages,
-        stream: false,
-        think: req.think ?? false,
-        keep_alive: KEEP_ALIVE,
-        format: req.schema,
-        options: { temperature: req.temperature ?? 0.2, num_ctx: req.numCtx ?? 8192 },
-      }),
-    });
-  } catch (err) {
-    if ((err as Error).name === "TimeoutError") throw new AiError("failed", "The AI model took too long to answer.");
-    throw new AiError("not-running", "Ollama isn't running. Open the Ollama app, then try again.");
-  }
-  if (!res.ok) {
-    const text = await res.text();
-    if (res.status === 404 || /not found/i.test(text)) {
-      throw new AiError("model-missing", `The AI model isn't downloaded. In a terminal, run: ollama pull ${cfg.model}`);
-    }
-    throw new AiError("failed", `Ollama error ${res.status}: ${text.slice(0, 200)}`);
-  }
-  const content = ((await res.json()) as { message?: { content?: string } }).message?.content ?? "";
+  const content = await provider().chat({ model: cfg.model, ...req });
   if (!req.schema) return content as T;
   try {
     return JSON.parse(fixLatexEscapes(content)) as T;
@@ -151,18 +103,19 @@ export function fixLatexEscapes(json: string): string {
   return json.replace(/(?<!\\)\\(?=(?:[bfrt][a-zA-Z]|n(?:eq|e\b|ot|u\b|abla|leq|geq|mid|subseteq|exists|i\b|ewline)))/g, "\\\\");
 }
 
-/** Is Ollama running, and is the model downloaded? */
+/** Is the AI available (Ollama running), and is the model downloaded? */
 export async function checkAi(cfg: AiConfig = DEFAULT_AI): Promise<{ ok: true } | { ok: false; error: AiError }> {
-  try {
-    const res = await fetch(`${cfg.baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    const tags = (await res.json()) as { models?: { name: string }[] };
-    if (!tags.models?.some((m) => m.name === cfg.model)) {
-      return { ok: false, error: new AiError("model-missing", `The AI model isn't downloaded. In a terminal, run: ollama pull ${cfg.model}`) };
-    }
-    return { ok: true };
-  } catch {
-    return { ok: false, error: new AiError("not-running", "Ollama isn't running. Open the Ollama app, then try again.") };
+  const models = await provider().models();
+  if (!models) return { ok: false, error: new AiError("not-running", "Ollama isn't running. Open the Ollama app, then try again.") };
+  if (!hasModel(models, cfg.model)) {
+    return { ok: false, error: new AiError("model-missing", `The AI model isn't downloaded. In a terminal, run: ollama pull ${cfg.model}`) };
   }
+  return { ok: true };
+}
+
+/** "embeddinggemma" is listed as "embeddinggemma:latest". */
+function hasModel(models: string[], model: string): boolean {
+  return models.some((m) => m === model || m === `${model}:latest`);
 }
 
 // ---------- session material ----------
@@ -523,7 +476,7 @@ Student's answer: ${studentAnswer}
  * Math courses use a small model made for reading documents (GLM-OCR, ~4 s per page section), because
  * Apple's text recognition can't read formulas. It returns Markdown with math as LaTeX ($...$).
  */
-export const MATH_READER: AiConfig = { baseUrl: DEFAULT_AI.baseUrl, model: "glm-ocr:q8_0" };
+export const MATH_READER: AiConfig = { model: "glm-ocr:q8_0" };
 
 /**
  * Reads an image (JPEG/PNG, base64) into lines of Markdown + LaTeX. The reply is streamed so we can stop
@@ -534,62 +487,32 @@ export function readMathImage(imageBase64: string, expectedChars: number, cfg: A
 }
 
 async function readMathImageNow(imageBase64: string, expectedChars: number, cfg: AiConfig): Promise<string[]> {
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), 60_000);
-  let res: Response;
-  try {
-    res = await fetch(`${cfg.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: abort.signal,
-      body: JSON.stringify({
-        model: cfg.model,
-        stream: true,
-        keep_alive: KEEP_ALIVE,
-        messages: [{ role: "user", content: "Text Recognition:", images: [imageBase64] }],
-        // LaTeX takes ~3 tokens per character of Apple's reading; the stream check below stops loops early.
-        options: { temperature: 0, num_ctx: 8192, num_predict: Math.min(3000, 200 + 3 * expectedChars), stop: ["```"] },
-      }),
-    });
-  } catch {
-    clearTimeout(timer);
-    throw new AiError("not-running", "Ollama isn't running.");
-  }
-  if (!res.ok || !res.body) {
-    clearTimeout(timer);
-    throw new AiError(res.status === 404 ? "model-missing" : "failed", `Math reader error ${res.status}`);
-  }
   let text = "";
-  let buffer = "";
-  const decoder = new TextDecoder();
   try {
-    reading: for await (const chunk of res.body) {
-      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
-      let nl: number;
-      while ((nl = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, nl);
-        buffer = buffer.slice(nl + 1);
-        if (!line.trim()) continue;
-        const part = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
-        text += part.message?.content ?? "";
+    text = await provider().stream(
+      {
+        model: cfg.model,
+        messages: [{ role: "user", content: "Text Recognition:", images: [imageBase64] }],
+        temperature: 0,
+        // LaTeX takes ~3 tokens per character of Apple's reading; the check below stops loops early.
+        maxTokens: Math.min(3000, 200 + 3 * expectedChars),
+        stop: ["```"],
+        timeoutMs: 60_000,
+      },
+      (piece) => {
+        text += piece;
         // A finished line we've already seen means the model is looping: stop here.
-        const lines = text.split("\n");
-        const finished = lines.slice(0, -1).map((l) => l.trim()).filter(Boolean);
+        const finished = text.split("\n").slice(0, -1).map((l) => l.trim()).filter(Boolean);
         if (finished.length) {
           const last = finished[finished.length - 1];
-          const earlier = finished.slice(0, -1);
-          if (last.length > 8 && earlier.includes(last)) {
-            abort.abort();
-            break reading;
-          }
+          if (last.length > 8 && finished.slice(0, -1).includes(last)) return false;
         }
-        if (part.done) break reading;
-      }
-    }
+      },
+    );
   } catch (err) {
-    if (!abort.signal.aborted) throw new AiError("failed", `Math reader failed: ${(err as Error).message}`);
-  } finally {
-    clearTimeout(timer);
+    if (err instanceof AiError && err.code !== "failed") throw err;
+    // Too slow or cut off: keep what was read so far.
+    if (!text) throw new AiError("failed", `Math reader failed: ${(err as Error).message}`);
   }
   return splitReading(text);
 }
@@ -789,44 +712,7 @@ ${HINT_LEVELS[req.level].instruction}
 If the image looks like a graded assignment or quiz question, never give its final answer. If the course material doesn't cover what's needed, say "This may not have been covered in your course yet." If the image is unclear, say so. Use Markdown; write math in LaTeX between $...$.`,
       },
     ];
-    const res = await fetch(`${cfg.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(180_000),
-      body: JSON.stringify({
-        model: cfg.model,
-        messages,
-        stream: true,
-        think: false,
-        keep_alive: KEEP_ALIVE,
-        options: { temperature: 0.3, num_ctx: 8192 },
-      }),
-    }).catch(() => {
-      throw new AiError("not-running", "Ollama isn't running. Open the Ollama app, then try again.");
-    });
-    if (!res.ok || !res.body) {
-      throw new AiError(res.status === 404 ? "model-missing" : "failed", `The AI model couldn't answer (error ${res.status}).`);
-    }
-    let answer = "";
-    let buffer = "";
-    const decoder = new TextDecoder();
-    for await (const chunk of res.body) {
-      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
-      let nl: number;
-      while ((nl = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (!line) continue;
-        const part = JSON.parse(line) as { message?: { content?: string }; error?: string };
-        if (part.error) throw new AiError("failed", part.error);
-        const t = part.message?.content ?? "";
-        if (t) {
-          answer += t;
-          onText(t);
-        }
-      }
-    }
-    return answer;
+    return provider().stream({ model: cfg.model, messages, temperature: 0.3 }, (piece) => void onText(piece));
   });
 }
 
@@ -836,16 +722,12 @@ If the image looks like a graded assignment or quiz question, never give its fin
  * An embedding turns text into a list of numbers so that passages about the same idea end up close
  * together, even when they use different words. Used for searching your past sessions by meaning.
  */
-export const EMBEDDER: AiConfig = { baseUrl: DEFAULT_AI.baseUrl, model: "embeddinggemma" };
+export const EMBEDDER: AiConfig = { model: "embeddinggemma" };
 
 /** Is the embedding model downloaded? (Without it, search falls back to matching words.) */
 export async function embeddingsAvailable(cfg: AiConfig = EMBEDDER): Promise<boolean> {
-  try {
-    const tags = (await (await fetch(`${cfg.baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) })).json()) as { models?: { name: string }[] };
-    return !!tags.models?.some((m) => m.name === cfg.model || m.name === `${cfg.model}:latest`);
-  } catch {
-    return false;
-  }
+  const models = await provider().models();
+  return !!models && hasModel(models, cfg.model);
 }
 
 /**
@@ -854,18 +736,7 @@ export async function embeddingsAvailable(cfg: AiConfig = EMBEDDER): Promise<boo
  */
 export function embed(texts: string[], as: "query" | "document" = "document", cfg: AiConfig = EMBEDDER): Promise<number[][]> {
   const prefix = as === "query" ? "task: search result | query: " : "title: none | text: ";
-  return withModel(cfg, async () => {
-    const res = await fetch(`${cfg.baseUrl}/api/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(120_000),
-      body: JSON.stringify({ model: cfg.model, input: texts.map((t) => prefix + t.slice(0, 4000)), keep_alive: KEEP_ALIVE }),
-    }).catch(() => {
-      throw new AiError("not-running", "Ollama isn't running.");
-    });
-    if (!res.ok) throw new AiError(res.status === 404 ? "model-missing" : "failed", `Embedding error ${res.status}`);
-    return ((await res.json()) as { embeddings: number[][] }).embeddings;
-  });
+  return withModel(cfg, () => provider().embed(cfg.model, texts.map((t) => prefix + t.slice(0, 4000))));
 }
 
 export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
