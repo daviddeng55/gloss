@@ -16,6 +16,7 @@ import {
   type BuddyTurn,
   type Candidate,
   type Focus,
+  type TriggerOptions,
 } from "../core/buddy.ts";
 import type { StudyDb } from "../core/db.ts";
 import type { Settings } from "../core/settings.ts";
@@ -67,9 +68,10 @@ export class BuddyService {
 
   // ---------- session ----------
 
-  startSession(s: BuddySession) {
+  /** `timing` overrides the trigger's timings (development checks use seconds instead of minutes). */
+  startSession(s: BuddySession, timing: Partial<TriggerOptions> = {}) {
     this.session = s;
-    this.trigger = new BuddyTrigger({ cooldownMs: this.deps.settings().buddy.minMinutes * 60_000 });
+    this.trigger = new BuddyTrigger({ cooldownMs: this.deps.settings().buddy.minMinutes * 60_000, ...timing });
     this.textByTitle.clear();
     this.conceptsAt = 0;
   }
@@ -343,6 +345,11 @@ export class BuddyService {
   smokeOpen(s: BuddySession, character: BuddyCharacter, name: string, focus: Focus, q: { question: string; concept: string }) {
     this.smokeSession = s;
     this.open(s, { focus, dwellMs: 300_000, finishedAt: Date.now() }, character, name, q);
+  }
+
+  /** Is this the buddy's window? */
+  isWindow(win: BrowserWindow | null): boolean {
+    return !!win && win === this.win;
   }
 
   windowForSmoke(): BrowserWindow | null {

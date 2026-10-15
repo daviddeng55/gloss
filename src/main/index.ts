@@ -660,7 +660,7 @@ function registerIpc() {
   ipcMain.handle("window:close", (e) => {
     if (asker.isOverlay(BrowserWindow.fromWebContents(e.sender))) return asker.cancel(); // Esc while circling
     const win = BrowserWindow.fromWebContents(e.sender);
-    if (win && win === buddy.windowForSmoke()) return buddy.close();
+    if (buddy.isWindow(win)) return buddy.close();
     if (win === popup) hidePopover();
     else win?.close();
   });
@@ -1197,6 +1197,7 @@ async function smokeBuddy(dir: string) {
     if (!win) return console.log("SMOKE no window for", name);
     w(join(dir, `${name}-${theme}.png`), (await win.webContents.capturePage()).toPNG());
   };
+  // 1. Screenshots: the picker, then every character asking, confused and happy.
   openBuddyPicker();
   await wait(2500);
   await shot(pickerWin, "picker");
@@ -1231,5 +1232,33 @@ async function smokeBuddy(dir: string) {
   await reviewWin?.webContents.executeJavaScript(`document.getElementById("buddy")?.scrollIntoView()`);
   await wait(400);
   await shot(reviewWin, "review-buddy");
+  // 2. The real path, with timings in seconds: read a page, move on, and the buddy appears by itself.
+  {
+    const course = loadCourses()[0];
+    const id = db.createSession({ courseId: course.id, startedAt: new Date().toISOString() });
+    const st = loadSettings(settingsFile());
+    st.buddy = { ...st.buddy, enabled: true, character: "dog" };
+    writeFileSync(settingsFile(), JSON.stringify(st, null, 2));
+    buddy.startSession(
+      { sessionId: id, courseId: course.id, courseName: course.name, isPaused: () => false },
+      { minDwellMs: 3000, settleMs: 1000, graceMs: 20_000, idleNeededMs: 0, cooldownMs: 0 },
+    );
+    buddy.onEntry({ capturedAt: new Date().toISOString(), app: "Preview", title: "Lecture 11.pdf", text: "Strong induction: prove P(1), then P(1..k) imply P(k+1)." });
+    for (let i = 0; i < 10; i++) {
+      buddy.onObserve({ page: "preview|Lecture 11.pdf", title: "Lecture 11.pdf" });
+      await wait(500);
+    }
+    for (let i = 0; i < 8 && !buddy.getView(); i++) {
+      buddy.onObserve({ page: "chrome|Exercises", title: "Exercises" });
+      await wait(500);
+    }
+    await wait(1500);
+    console.log("SMOKE buddy appeared on its own:", JSON.stringify(buddy.getView() && { mood: buddy.getView()!.mood, line: buddy.getView()!.line }));
+    buddy.notNow();
+    await wait(500);
+    console.log("SMOKE after Not now:", JSON.stringify(db.buddyChats(id).map((c) => c.outcome)), "window open:", !!buddy.windowForSmoke());
+    buddy.endSession();
+  }
+
   app.quit();
 }
