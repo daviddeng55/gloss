@@ -1,11 +1,13 @@
 // The local SQLite database (Node's built-in node:sqlite, which Electron includes).
 // Lives in the app's data folder: ~/Library/Application Support/Gloss/gloss.db
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import type { ChunkRow, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
+import type { ChunkRow, FoundMoment, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
 import type { Passage, QuizDraft } from "./ai.ts";
 import { conceptKey, type Evidence, type HintLevelName } from "./learner.ts";
 import type { NewChunk } from "./chunker.ts";
+import { MATCH_END, MATCH_START, toFtsQuery } from "../shared/search.ts";
 
 // Each entry upgrades the database by one version. Never edit a released entry; add a new one.
 const MIGRATIONS = [
@@ -95,6 +97,27 @@ const MIGRATIONS = [
    CREATE INDEX concept_chunks_session ON concept_chunks(session_id);
    ALTER TABLE quiz_items ADD COLUMN concept_id TEXT;
    ALTER TABLE questions ADD COLUMN concept_id TEXT;`,
+  // 5: "Find it" — a full-text index of every passage, filled from the existing ones and kept in step
+  // by triggers (which also run when deleting a session or course removes its passages).
+  // chunks.fts_rowid links each passage to its index row, so deletes find it at once.
+  `CREATE VIRTUAL TABLE chunks_fts USING fts5(
+     text, source_title, source_app, chunk_id UNINDEXED,
+     tokenize = 'unicode61 remove_diacritics 2'
+   );
+   ALTER TABLE chunks ADD COLUMN fts_rowid INTEGER;
+   INSERT INTO chunks_fts (rowid, text, source_title, source_app, chunk_id)
+     SELECT rowid, text, source_title, source_app, id FROM chunks;
+   UPDATE chunks SET fts_rowid = rowid;
+   CREATE TRIGGER chunks_fts_insert AFTER INSERT ON chunks BEGIN
+     INSERT INTO chunks_fts (text, source_title, source_app, chunk_id) VALUES (new.text, new.source_title, new.source_app, new.id);
+     UPDATE chunks SET fts_rowid = last_insert_rowid() WHERE id = new.id;
+   END;
+   CREATE TRIGGER chunks_fts_delete AFTER DELETE ON chunks BEGIN
+     DELETE FROM chunks_fts WHERE rowid = old.fts_rowid;
+   END;
+   CREATE TRIGGER chunks_fts_update AFTER UPDATE OF text, source_title, source_app ON chunks BEGIN
+     UPDATE chunks_fts SET text = new.text, source_title = new.source_title, source_app = new.source_app WHERE rowid = new.fts_rowid;
+   END;`,
 ];
 
 type Row = Record<string, any>;
@@ -105,17 +128,27 @@ export class StudyDb {
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-    this.migrate();
+    this.migrate(path);
     this.closeAbandonedSessions();
   }
 
-  private migrate() {
+  private migrate(path: string) {
     const version = (this.db.prepare("PRAGMA user_version").get() as Row).user_version as number;
+    // Before upgrading an existing database, save a full copy next to it (e.g. gloss.backup-v4.db).
+    if (version > 0 && version < MIGRATIONS.length && path !== ":memory:") {
+      const backup = path.replace(/(\.db)?$/, `.backup-v${version}.db`);
+      if (!existsSync(backup)) this.db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
+    }
     for (let v = version; v < MIGRATIONS.length; v++) {
       this.db.exec("BEGIN");
-      this.db.exec(MIGRATIONS[v]);
-      this.db.exec(`PRAGMA user_version = ${v + 1}`);
-      this.db.exec("COMMIT");
+      try {
+        this.db.exec(MIGRATIONS[v]);
+        this.db.exec(`PRAGMA user_version = ${v + 1}`);
+        this.db.exec("COMMIT");
+      } catch (e) {
+        this.db.exec("ROLLBACK"); // leave the database exactly as it was
+        throw e;
+      }
     }
   }
 
@@ -180,6 +213,41 @@ export class StudyDb {
       .prepare("SELECT * FROM chunks WHERE session_id = ? ORDER BY captured_at, rowid")
       .all(id) as Row[];
     return { ...toSession(s), chunks: chunks.map(toChunk), questions: this.getQuestions(id) };
+  }
+
+  // ---------- Find it: full-text search over everything captured ----------
+
+  /** Passages matching what you typed, best matches first, with the matching words marked. */
+  search(input: string, limit = 50): Omit<FoundMoment, "courseName">[] {
+    const query = toFtsQuery(input);
+    if (!query) return [];
+    return (this.db
+      .prepare(
+        `SELECT c.id, c.session_id, c.course_id, c.source_app, c.captured_at,
+                highlight(chunks_fts, 1, ?, ?) AS title, snippet(chunks_fts, 0, ?, ?, '…', 24) AS snippet
+         FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.chunk_id
+         WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?`,
+      )
+      .all(MATCH_START, MATCH_END, MATCH_START, MATCH_END, query, limit) as Row[]).map((r) => ({
+      chunkId: r.id,
+      sessionId: r.session_id,
+      courseId: r.course_id,
+      sourceApp: r.source_app,
+      sourceTitle: r.title,
+      capturedAt: r.captured_at,
+      snippet: r.snippet,
+    }));
+  }
+
+  /** A passage's whole text, with the words matching what you typed marked. */
+  foundText(chunkId: string, input: string): string | null {
+    const query = toFtsQuery(input);
+    const r = (query
+      ? this.db
+          .prepare("SELECT highlight(chunks_fts, 0, ?, ?) AS text FROM chunks_fts WHERE chunks_fts MATCH ? AND chunk_id = ?")
+          .get(MATCH_START, MATCH_END, query, chunkId)
+      : undefined) as Row | undefined;
+    return r?.text ?? (this.getChunkText(chunkId) || null);
   }
 
   // ---------- Stage 3: summary and quiz ----------

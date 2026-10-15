@@ -40,6 +40,8 @@ const api: StudyApi = {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (s) => ipcRenderer.invoke("settings:save", s),
   openSettings: () => ipcRenderer.invoke("settings:open"),
+  find: (query) => ipcRenderer.invoke("find:search", query),
+  foundText: (chunkId, query) => ipcRenderer.invoke("find:text", chunkId, query),
   deleteCourseData: (courseId) => ipcRenderer.invoke("courses:delete-data", courseId),
   onReview: (callback) => {
     const listener = (_e: unknown, sessionId: string) => callback(sessionId);

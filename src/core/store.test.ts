@@ -114,3 +114,58 @@ test("settings are kept in sensible ranges", async () => {
   assert.equal(s.ask.fallbackW, 900);
   assert.equal(s.ask.shortcut, "Alt+A");
 });
+
+test("find it: full-text search over passages, kept in step with deletes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-"));
+  try {
+    const db = new StudyDb(join(dir, "t.db"));
+    const s1 = db.createSession({ courseId: "math135", startedAt: "2026-10-01T20:00:00.000Z" });
+    const s2 = db.createSession({ courseId: "cs135", startedAt: "2026-10-02T20:00:00.000Z" });
+    const at = "2026-10-01T20:01:00.000Z";
+    const strong = db.addChunk(s1, "math135", { text: "Strong induction: assume P(1), …, P(k) all hold.", sourceApp: "Google Chrome", sourceTitle: "Lecture 11", capturedAt: at });
+    db.addChunk(s1, "math135", { text: "Weak induction only assumes P(k).", sourceApp: "Preview", sourceTitle: "Notes", capturedAt: at });
+    db.addChunk(s2, "cs135", { text: "Racket lists and recursion.", sourceApp: "DrRacket", sourceTitle: "Résumé of lists", capturedAt: at });
+    assert.deepEqual(db.search("strong induction").map((m) => m.chunkId), [strong]);
+    assert.equal(db.search("INDUCT").length, 2, "case-insensitive, last word may be unfinished");
+    assert.equal(db.search("resume").length, 1, "window titles are searched, accents ignored");
+    assert.equal(db.search('"(* NEAR OR').length, 0, "odd input never breaks the query");
+    assert.equal(db.search("   ").length, 0);
+    const [hit] = db.search("strong");
+    assert.match(hit.snippet, /\u0001Strong\u0002 induction/);
+    assert.equal(hit.sourceApp, "Google Chrome");
+    assert.match(db.foundText(strong, "hold")!, /all \u0001hold\u0002\./);
+    db.deleteChunk(strong);
+    assert.equal(db.search("strong").length, 0, "deleted passage leaves the index");
+    db.deleteSession(s2);
+    assert.equal(db.search("racket").length, 0, "deleting a session removes its passages from the index");
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("upgrading an older database backs it up first and indexes the existing passages", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-"));
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const path = join(dir, "gloss.db");
+    const db = new StudyDb(path);
+    const s = db.createSession({ courseId: "math135", startedAt: "2026-10-01T20:00:00.000Z" });
+    db.addChunk(s, "math135", { text: "Strong induction", sourceApp: "x", sourceTitle: "x", capturedAt: "2026-10-01T20:01:00.000Z" });
+    db.close();
+    // Turn it back into a version-4 database (before "Find it").
+    const raw = new DatabaseSync(path);
+    raw.exec(`DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update;
+              DROP TABLE chunks_fts; ALTER TABLE chunks DROP COLUMN fts_rowid; PRAGMA user_version = 4;`);
+    raw.close();
+    const upgraded = new StudyDb(path);
+    assert.equal(upgraded.search("strong").length, 1, "existing passages are searchable");
+    upgraded.close();
+    const backup = new DatabaseSync(join(dir, "gloss.backup-v4.db"), { readOnly: true });
+    assert.equal((backup.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 4);
+    assert.equal((backup.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n, 1);
+    backup.close();
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});

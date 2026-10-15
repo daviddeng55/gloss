@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import Ask from "./Ask.tsx";
+import Find from "./Find.tsx";
 import History from "./History.tsx";
 import Learn from "./Learn.tsx";
 import Settings from "./Settings.tsx";
@@ -10,9 +11,9 @@ import Review from "./Review.tsx";
 import StartPopup from "./StartPopup.tsx";
 import "./index.css";
 
-// One page, several screens: #/start (menu bar popup), #/history, #/review/<session>, #/overlay, #/ask/<ask>.
+// One page, several screens: #/start (menu bar popup), #/history, #/review/<session>, #/overlay, #/ask/<ask>, #/find.
 const [route, param] = location.hash.replace(/^#\/?/, "").split("/");
-document.body.className = ["start", "overlay", "ask"].includes(route) ? "bg-transparent" : "bg-paper";
+document.body.className = ["start", "overlay", "ask", "find"].includes(route) ? "bg-transparent" : "bg-paper";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -22,6 +23,8 @@ createRoot(document.getElementById("root")!).render(
       <Overlay />
     ) : route === "ask" && param ? (
       <Ask askId={param} />
+    ) : route === "find" ? (
+      <Find />
     ) : route === "settings" ? (
       <Settings />
     ) : route === "learn" ? (

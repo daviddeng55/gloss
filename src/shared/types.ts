@@ -49,6 +49,18 @@ export type QuestionRow = {
   answers: { level: string; text: string; at: string }[];
 };
 
+/** A "Find it" result: one captured passage that matches the search. Matching words are marked (shared/search.ts). */
+export type FoundMoment = {
+  chunkId: string;
+  sessionId: string;
+  courseId: string;
+  courseName: string;
+  sourceApp: string;
+  sourceTitle: string;
+  capturedAt: string;
+  snippet: string;
+};
+
 export type SessionDetail = SessionRow & { chunks: ChunkRow[]; questions: QuestionRow[] };
 
 /** What a session covered (or why it couldn't be summarized). */
@@ -195,4 +207,6 @@ export interface StudyApi {
   onOverlay(callback: (e: OverlayEvent) => void): () => void;
   overlayClick(): Promise<void>;
   onState(callback: (state: AppState) => void): () => void;
+  find(query: string): Promise<FoundMoment[]>;
+  foundText(chunkId: string, query: string): Promise<string | null>;
 }

@@ -36,6 +36,7 @@ _Screenshots coming soon._
   each one (this fades if you don't practise) and which kind of help works for you. It uses this to aim
   quizzes at weak spots, warm you up with questions due for review, and pitch answers at the right
   level. You can see, correct and delete all of it under **How You Learn…**.
+- **Find it.** Search everything Gloss has read on your screen. See [Find it](#find-it) below.
 - **Privacy controls.** Apps and sites on a never-record list (password managers, banking, messaging,
   email, private windows) are never read. Card numbers, SINs and text near "password" are redacted
   before anything is saved. You can delete a session, or everything for a course, from History.
@@ -111,6 +112,18 @@ Gloss doesn't need Accessibility or Input Monitoring.
 
 Your data is stored in `~/Library/Application Support/Gloss/`. Delete that folder to erase
 everything.
+
+## Find it
+
+Click the menu bar icon → **Find It…** and type what you remember, e.g. `strong induction`. Results
+appear as you type: a snippet with the matching words highlighted, the date and time, and the course,
+app and window it came from. Click a result (or use ↑ ↓ and Return) to read everything captured at
+that moment; **Esc** goes back, then closes.
+
+It uses SQLite's built-in full-text search over the text Gloss already saved, so it's instant and
+works offline with no AI. Every word must appear (any order, any case), and the last word can be
+unfinished. Passages captured before this feature are included, and deleted ones disappear from the
+results.
 
 ## Known limitations
 

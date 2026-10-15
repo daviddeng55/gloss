@@ -45,6 +45,7 @@ let learner: LearnerService;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
+let findWin: BrowserWindow | null = null;
 let current: Current | null = null;
 let lastMenuKey = "";
 let aiProblem = ""; // shown in the menu when the local AI isn't available
@@ -110,6 +111,7 @@ function updateTray() {
         ]
       : []),
     { type: "separator" },
+    { label: "Find It…", click: showFind },
     { label: "History…", click: showHistory },
     { label: "How You Learn…", click: openLearn },
     { label: "Settings…", accelerator: "Command+,", click: openSettings },
@@ -293,13 +295,49 @@ function showStartPopup() {
     popup.on("blur", () => popup?.hide());
     load(popup, "start");
   }
-  // Drop down from the menu bar icon, kept on screen.
-  const b = tray.getBounds();
-  const area = screen.getDisplayNearestPoint({ x: b.x, y: b.y }).workArea;
-  const x = Math.min(Math.max(Math.round(b.x + b.width / 2 - POPUP.width / 2), area.x + 8), area.x + area.width - POPUP.width - 8);
-  popup.setPosition(x, Math.round(area.y + 6));
+  dropDown(popup, POPUP.width);
   popup.webContents.send("state", getState()); // reset the form for a fresh start
   popup.show();
+  app.focus({ steal: true });
+}
+
+/** Places a window so it drops down from the menu bar icon, kept on screen. */
+function dropDown(win: BrowserWindow, width: number) {
+  const b = tray.getBounds();
+  const area = screen.getDisplayNearestPoint({ x: b.x, y: b.y }).workArea;
+  const x = Math.min(Math.max(Math.round(b.x + b.width / 2 - width / 2), area.x + 8), area.x + area.width - width - 8);
+  win.setPosition(x, Math.round(area.y + 6));
+}
+
+const FIND = { width: 480, height: 580 };
+
+/** "Find it": search everything captured. Drops down from the menu bar like the start popup. */
+function showFind() {
+  if (!findWin) {
+    findWin = new BrowserWindow({
+      ...FIND,
+      show: false,
+      frame: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      vibrancy: "popover",
+      visualEffectState: "active",
+      backgroundColor: "#00000000",
+      webPreferences: { preload, sandbox: true, contextIsolation: true },
+    });
+    findWin.on("blur", () => {
+      if (!process.env.GLOSS_SMOKE_FIND) findWin?.hide();
+    });
+    load(findWin, "find");
+  }
+  dropDown(findWin, FIND.width);
+  findWin.webContents.send("state", getState()); // focuses the search box
+  findWin.show();
   app.focus({ steal: true });
 }
 
@@ -455,6 +493,11 @@ function registerIpc() {
     startSession(String(courseId), typeof goal === "string" ? goal : ""),
   );
   ipcMain.handle("sessions:list", () => db.listSessions());
+  ipcMain.handle("find:search", (_e, query: unknown) => {
+    const names = new Map(loadCourses().map((c) => [c.id, c.name]));
+    return db.search(String(query)).map((m) => ({ ...m, courseName: names.get(m.courseId) ?? m.courseId }));
+  });
+  ipcMain.handle("find:text", (_e, chunkId: unknown, query: unknown) => db.foundText(String(chunkId), String(query)));
   ipcMain.handle("sessions:get", (_e, id: unknown) => db.getSession(String(id)));
   ipcMain.handle("settings:screen-recording", () =>
     shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
@@ -517,7 +560,7 @@ function registerIpc() {
   ipcMain.handle("window:close", (e) => {
     if (asker.isOverlay(BrowserWindow.fromWebContents(e.sender))) return asker.cancel(); // Esc while circling
     const win = BrowserWindow.fromWebContents(e.sender);
-    if (win === popup) win?.hide();
+    if (win === popup || win === findWin) win?.hide();
     else win?.close();
   });
 }
@@ -621,6 +664,7 @@ app.whenReady().then(() => {
   if (process.env.GLOSS_SMOKE_REVIEW) void smokeReview(process.env.GLOSS_SMOKE_REVIEW);
   if (process.env.GLOSS_SMOKE_ASK) void smokeAsk(process.env.GLOSS_SMOKE_ASK);
   if (process.env.GLOSS_SMOKE_LEARN) void smokeLearn(process.env.GLOSS_SMOKE_LEARN);
+  if (process.env.GLOSS_SMOKE_FIND) void smokeFind(process.env.GLOSS_SMOKE_FIND);
   // Development checks: show errors from every window in the terminal.
   if (process.env.GLOSS_DB) {
     app.on("web-contents-created", (_e, wc) =>
@@ -661,6 +705,32 @@ async function smokeTest(dir: string) {
   const h = new VisionHelper({ helperPath: fromRoot("bin", "vision-helper") });
   console.log("SMOKE screen recording permission:", await h.hasPermission());
   h.close();
+  app.quit();
+}
+
+/**
+ * Development check for "Find it": types GLOSS_SMOKE_QUERY (default "induction") into the search box,
+ * times the search, opens the first result, and saves screenshots of both views to `dir`.
+ */
+async function smokeFind(dir: string) {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const query = process.env.GLOSS_SMOKE_QUERY ?? "induction";
+  showFind();
+  await wait(2500);
+  const t0 = performance.now();
+  const n = db.search(query).length;
+  console.log(`SMOKE find: ${n} results for ${JSON.stringify(query)} in ${(performance.now() - t0).toFixed(1)} ms`);
+  const js = (code: string) => findWin!.webContents.executeJavaScript(code);
+  await js(`(() => { const i = document.querySelector("input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, ${JSON.stringify(query)});
+    i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  await wait(800);
+  writeFileSync(join(dir, "find-results.png"), (await findWin!.webContents.capturePage()).toPNG());
+  console.log("SMOKE find list:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
+  await js(`document.querySelector("[data-result]")?.click()`);
+  await wait(800);
+  writeFileSync(join(dir, "find-detail.png"), (await findWin!.webContents.capturePage()).toPNG());
+  console.log("SMOKE find detail:", JSON.stringify(String(await js("document.body.innerText")).slice(0, 400)));
   app.quit();
 }
 
