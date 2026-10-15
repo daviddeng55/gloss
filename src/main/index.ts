@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
 import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
-import { provider } from "../core/provider.ts";
+import { MockProvider, provider, setProvider } from "../core/provider.ts";
+import { BuddyService } from "./buddy.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
 import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
@@ -22,6 +23,8 @@ import { ReviewService } from "./review.ts";
 
 const ROOT = app.getAppPath(); // the project folder while developing
 const fromRoot = (...p: string[]) => join(ROOT, ...p);
+/** settings.json in the project folder (development checks pass GLOSS_SETTINGS to use a throwaway copy). */
+const settingsFile = () => process.env.GLOSS_SETTINGS ?? fromRoot("settings.json");
 
 type Current = {
   sessionId: string;
@@ -45,6 +48,8 @@ let reviews: ReviewService;
 let asker: AskController;
 let learner: LearnerService;
 let notes: NotesService;
+let buddy: BuddyService;
+let pickerWin: BrowserWindow | null = null;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
@@ -168,7 +173,7 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
     db.addChunk(sessionId, courseId, chunk);
     session.chunks!++;
   });
-  const settings = loadSettings(fromRoot("settings.json"));
+  const settings = loadSettings(settingsFile());
   const confusion = settings.learn.offerHelpWhenStuck ? new ConfusionDetector() : null;
   const shortcutText = () => settings.ask.shortcut.replace(/Alt|Option/i, "⌥").replace(/\+/g, "");
   // Math courses: re-read new math with the AI model (only if Ollama is ready; otherwise skip quietly).
@@ -185,8 +190,12 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
       intervalMs: settings.capture.intervalSeconds * 1000,
       dwellMs: settings.capture.dwellSeconds * 1000,
     },
-    onEntry: (entry) => session.chunker!.add(entry),
+    onEntry: (entry) => {
+      session.chunker!.add(entry);
+      buddy.onEntry(entry);
+    },
     onObserve: (o) => {
+      buddy.onObserve(o);
       // Noticing when you might be stuck: a quiet offer of help, never an interruption.
       const hint = confusion?.observe({ at: Date.now(), ...o });
       if (hint) new Notification({ title: "Gloss", body: `${hint} (${shortcutText()})`, silent: true }).show();
@@ -207,9 +216,13 @@ async function startSession(courseId: string, goal: string): Promise<StartResult
       isPaused: () => current?.loop.status === "paused",
     },
     // Development checks never trigger the real microphone/speech permission prompts.
-    ((st) => (process.env.GLOSS_SMOKE_ASK ? { ...st, ask: { ...st.ask, voice: false } } : st))(loadSettings(fromRoot("settings.json"))),
+    ((st) => (process.env.GLOSS_SMOKE_ASK ? { ...st, ask: { ...st.ask, voice: false } } : st))(loadSettings(settingsFile())),
   );
   if (askProblem) console.log(`[ask] ${askProblem}`);
+  // Study Buddy watches for the moment you finish a concept.
+  if (!process.env.GLOSS_SMOKE_ASK && !process.env.GLOSS_SMOKE_SESSION) {
+    buddy.startSession({ sessionId, courseId, courseName: course.name, isPaused: () => current?.loop.status === "paused" });
+  }
   // Warm-up: questions you're due to review in this course (wrong ones first).
   if (!process.env.GLOSS_SMOKE_ASK && !process.env.GLOSS_SMOKE_SESSION && learner.warmup(sessionId, courseId)) openWarmup(sessionId);
   popup?.hide();
@@ -244,6 +257,7 @@ function endSession(): Promise<void> {
   const c = current;
   const endedAt = new Date().toISOString();
   asker.endSession();
+  buddy.endSession();
   c.loop.stop();
   current = null;
   broadcast();
@@ -416,7 +430,7 @@ function openSettings() {
 /** Everything the Settings window edits (three files in the project folder). */
 function readAllSettings(): SettingsBundle {
   const nr = JSON.parse(readFileSync(fromRoot("never-record.json"), "utf8")) as { apps?: string[]; titles?: string[] };
-  return { settings: loadSettings(fromRoot("settings.json")), courses: loadCourses(), neverRecord: { apps: nr.apps ?? [], titles: nr.titles ?? [] } };
+  return { settings: loadSettings(settingsFile()), courses: loadCourses(), neverRecord: { apps: nr.apps ?? [], titles: nr.titles ?? [] } };
 }
 
 function saveAllSettings(b: SettingsBundle): { ok: boolean; message?: string } {
@@ -436,7 +450,7 @@ function saveAllSettings(b: SettingsBundle): { ok: boolean; message?: string } {
   }
   const nrPath = fromRoot("never-record.json");
   const comment = (JSON.parse(readFileSync(nrPath, "utf8")) as { _comment?: string })._comment;
-  writeFileSync(fromRoot("settings.json"), JSON.stringify(sanitizeSettings(b.settings), null, 2) + "\n");
+  writeFileSync(settingsFile(), JSON.stringify(sanitizeSettings(b.settings), null, 2) + "\n");
   writeFileSync(fromRoot("courses.json"), JSON.stringify(courses, null, 2) + "\n");
   writeFileSync(
     nrPath,
@@ -507,6 +521,38 @@ function noteTree(): NoteTree {
     pending,
     writing: notes.writing(),
   };
+}
+
+// ---------- Study Buddy picker ----------
+
+/** The first time after Study Buddy arrives: pick a character (or turn it off). */
+function openBuddyPicker() {
+  if (pickerWin) return void pickerWin.show();
+  pickerWin = new BrowserWindow({
+    width: 720,
+    height: 600,
+    show: false,
+    resizable: false,
+    title: "Gloss — Meet your Study Buddy",
+    titleBarStyle: "hiddenInset",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#fafaf7",
+    webPreferences: { preload, sandbox: true, contextIsolation: true },
+  });
+  pickerWin.on("closed", () => (pickerWin = null));
+  pickerWin.once("ready-to-show", () => pickerWin?.show());
+  load(pickerWin, "buddy-pick");
+  app.focus({ steal: true });
+}
+
+function chooseBuddy(choice: unknown) {
+  const s = loadSettings(settingsFile());
+  if (choice === "off") s.buddy = { ...s.buddy, enabled: false };
+  else if (choice && typeof choice === "object") {
+    const c = choice as { character?: unknown; name?: unknown };
+    s.buddy = { ...s.buddy, enabled: true, character: c.character as Settings["buddy"]["character"], name: typeof c.name === "string" ? c.name : "" };
+  }
+  if (choice !== "later") writeFileSync(settingsFile(), JSON.stringify(sanitizeSettings(s), null, 2) + "\n");
+  pickerWin?.close();
 }
 
 // ---------- IPC (requests from the windows) ----------
@@ -583,6 +629,13 @@ function registerIpc() {
     void asker.ask(String(id), typeof question === "string" ? question : "", lvl);
   });
   ipcMain.handle("overlay:click", () => asker.overlayClicked());
+  ipcMain.handle("buddy:view", () => buddy.getView());
+  ipcMain.handle("buddy:answer", (_e, text: unknown) => buddy.answer(typeof text === "string" ? text : ""));
+  ipcMain.handle("buddy:mic", () => buddy.mic());
+  ipcMain.handle("buddy:not-now", () => buddy.notNow());
+  ipcMain.handle("buddy:pause", () => buddy.pauseForSession());
+  ipcMain.handle("buddy:settings", () => loadSettings(settingsFile()).buddy);
+  ipcMain.handle("buddy:choose", (_e, choice: unknown) => chooseBuddy(choice));
   ipcMain.handle("chunks:delete", (_e, id: unknown) => db.deleteChunk(String(id)));
   // Deleting is refused for the session that's recording right now.
   ipcMain.handle("sessions:delete", (_e, id: unknown) => {
@@ -607,6 +660,7 @@ function registerIpc() {
   ipcMain.handle("window:close", (e) => {
     if (asker.isOverlay(BrowserWindow.fromWebContents(e.sender))) return asker.cancel(); // Esc while circling
     const win = BrowserWindow.fromWebContents(e.sender);
+    if (win && win === buddy.windowForSmoke()) return buddy.close();
     if (win === popup) hidePopover();
     else win?.close();
   });
@@ -634,6 +688,9 @@ function userDbPath(): string {
 if (process.env.GLOSS_DB) app.setPath("userData", join(dirname(process.env.GLOSS_DB), "userdata"));
 else if (!app.requestSingleInstanceLock()) app.quit();
 
+// Development checks can run with a pretend AI (GLOSS_AI=mock): nothing is sent to Ollama.
+if (process.env.GLOSS_AI === "mock") setProvider(new MockProvider(mockReply, []));
+
 app.whenReady().then(() => {
   app.dock?.hide(); // menu bar only, no Dock icon
   // GLOSS_DB lets development checks use a throwaway database.
@@ -646,19 +703,28 @@ app.whenReady().then(() => {
     (sessionId) => {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
     },
-    () => loadSettings(fromRoot("settings.json")).ai.reviewModel,
+    () => loadSettings(settingsFile()).ai.reviewModel,
   );
-  asker = new AskController(loadSettings(fromRoot("settings.json")), {
+  asker = new AskController(loadSettings(settingsFile()), {
     db,
     preload,
     load,
     voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Gloss Voice") },
     learner,
   });
+  buddy = new BuddyService({
+    db,
+    learner,
+    asker,
+    preload,
+    load,
+    settings: () => loadSettings(settingsFile()),
+    model: () => ({ model: loadSettings(settingsFile()).ai.askModel }),
+  });
   notes = new NotesService({
     db,
     courses: loadCourses,
-    model: () => loadSettings(fromRoot("settings.json")).ai.reviewModel,
+    model: () => loadSettings(settingsFile()).ai.reviewModel,
     changed: () => {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send("notes");
     },
@@ -734,6 +800,10 @@ app.whenReady().then(() => {
   if (process.env.GLOSS_SMOKE_FIND) void smokeFind(process.env.GLOSS_SMOKE_FIND);
   if (process.env.GLOSS_SMOKE_DESIGN) void smokeDesign(process.env.GLOSS_SMOKE_DESIGN);
   if (process.env.GLOSS_SMOKE_NOTES) void smokeNotes(Number(process.env.GLOSS_SMOKE_NOTES));
+  if (process.env.GLOSS_SMOKE_BUDDY) void smokeBuddy(process.env.GLOSS_SMOKE_BUDDY);
+  // Study Buddy arrived: let the user pick a character, once (development checks don't).
+  const bs = loadSettings(settingsFile()).buddy;
+  if (bs.enabled && !bs.character && !process.env.GLOSS_DB) setTimeout(openBuddyPicker, 2500);
   // Development checks: show errors from every window in the terminal.
   if (process.env.GLOSS_DB) {
     app.on("web-contents-created", (_e, wc) =>
@@ -1095,5 +1165,71 @@ async function smokeLearn(dir: string) {
   openLearn();
   await wait(2500);
   writeFileSync(join(dir, "learn.png"), (await learnWin!.webContents.capturePage()).toPNG());
+  app.quit();
+}
+
+/**
+ * Pretend AI for development checks (GLOSS_AI=mock). Study Buddy: an answer containing "not sure" or
+ * "dunno" has a gap; anything else is solid.
+ */
+function mockReply(req: import("../core/provider.ts").ChatRequest): string {
+  const prompt = req.messages.map((m) => m.content).join("\n");
+  if (/Write ONE short question/.test(prompt)) return JSON.stringify({ question: "Wait, why are you allowed to assume every smaller case in strong induction?", concept: "Strong induction" });
+  if (/Judge the student's latest explanation/.test(prompt)) {
+    const last = prompt.split("\nStudent: ").pop() ?? "";
+    return /not sure|dunno/i.test(last.split("\n")[0])
+      ? JSON.stringify({ verdict: "gap", followUp: "Hmm, but how do the smaller cases get proven in the first place?" })
+      : JSON.stringify({ verdict: "solid", followUp: "" });
+  }
+  return "{}";
+}
+
+/**
+ * Development check for Study Buddy (use with GLOSS_AI=mock, a throwaway GLOSS_DB and GLOSS_SETTINGS):
+ * screenshots the picker, then the buddy asking, confused (after a shaky answer) and happy, for every
+ * character, into `dir`. Also prints what the review saved.
+ */
+async function smokeBuddy(dir: string) {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const { writeFileSync: w } = await import("node:fs");
+  const theme = process.env.GLOSS_THEME ?? "system";
+  const shot = async (win: BrowserWindow | null, name: string) => {
+    if (!win) return console.log("SMOKE no window for", name);
+    w(join(dir, `${name}-${theme}.png`), (await win.webContents.capturePage()).toPNG());
+  };
+  openBuddyPicker();
+  await wait(2500);
+  await shot(pickerWin, "picker");
+  // Pick the cat and name it, the way a click would.
+  await pickerWin!.webContents.executeJavaScript(`document.querySelector('[data-buddy="cat"]').click()`);
+  await wait(300);
+  await shot(pickerWin, "picker-chosen");
+  pickerWin?.close();
+
+  const course = loadCourses()[0];
+  const sessionId = db.createSession({ courseId: course.id, startedAt: new Date().toISOString() });
+  const s = { sessionId, courseId: course.id, courseName: course.name, isPaused: () => false };
+  const focus = { key: "page:x", label: "Strong induction", page: "x", text: "Strong induction: to prove P(n) for all n, prove P(1), and show that P(1), ..., P(k) together imply P(k+1)." };
+  const q = { question: "Wait, why are you allowed to assume every smaller case in strong induction?", concept: "Strong induction" };
+  for (const character of ["dog", "cat", "penguin", "birdie"] as const) {
+    buddy.smokeOpen(s, character, "", focus, q);
+    await wait(1800);
+    await shot(buddy.windowForSmoke(), `buddy-${character}-asking`);
+    await buddy.answer("not sure, because it's true?");
+    await wait(900);
+    await shot(buddy.windowForSmoke(), `buddy-${character}-confused`);
+    await buddy.answer("Because the earlier steps already proved every smaller case, so they're all true and you can lean on any of them.");
+    await wait(900);
+    await shot(buddy.windowForSmoke(), `buddy-${character}-happy`);
+    await wait(4200); // it leaves on its own
+  }
+  console.log("SMOKE buddy chats saved:", JSON.stringify(db.buddyChats(sessionId).map((c) => ({ topic: c.topic, character: c.character, outcome: c.outcome, turns: c.turns.length }))));
+  const concept = db.getConcepts(course.id).find((c) => c.name === "Strong induction");
+  console.log("SMOKE evidence:", JSON.stringify(concept?.evidence.map((e) => `${e.kind}:${e.correct}`)));
+  openReview(sessionId);
+  await wait(2500);
+  await reviewWin?.webContents.executeJavaScript(`document.getElementById("buddy")?.scrollIntoView()`);
+  await wait(400);
+  await shot(reviewWin, "review-buddy");
   app.quit();
 }

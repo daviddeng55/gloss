@@ -9,7 +9,7 @@ import type { StudyDb } from "../core/db.ts";
 import type { VisionHelper } from "../core/helper.ts";
 import { blockedReason, pickFrontWindow, type NeverRecord } from "../core/privacy.ts";
 import type { Settings } from "../core/settings.ts";
-import { VoiceHelper } from "../core/voice.ts";
+import { VoiceHelper, type VoiceEvent } from "../core/voice.ts";
 import type { LearnerService } from "./learner.ts";
 import type { AskEvent, AskInfo, OverlayEvent } from "../shared/types.ts";
 
@@ -62,6 +62,8 @@ export class AskController {
   private voiceReady = false; // permissions granted and on-device recognition available
   private listening = false;
   private smokeSpoken = ""; // development check: pretend this was said
+  private lastAskAt = -Infinity; // when you last circled (Study Buddy stays away for a while after)
+  private dictation: ((e: VoiceEvent) => void) | null = null; // Study Buddy is listening to an answer
   private offVoice: (() => void) | null = null;
   private deps: {
     db: StudyDb;
@@ -102,6 +104,7 @@ export class AskController {
     try {
       this.voice = new VoiceHelper(this.deps.voicePaths);
       this.offVoice = this.voice.onEvent((e) => {
+        if (this.dictation) return this.dictation(e);
         if (!this.listening) return;
         if (e.event === "partial") this.send({ type: "speech", text: e.text });
         else this.send({ type: "level", value: e.value });
@@ -124,8 +127,10 @@ export class AskController {
   }
 
   endSession() {
-    if (this.listening) void this.voice?.cancel().catch(() => {});
+    if (this.listening || this.dictation) void this.voice?.cancel().catch(() => {});
     this.listening = false;
+    this.dictation = null;
+    this.lastAskAt = -Infinity;
     this.offVoice?.();
     this.voice?.close();
     this.voice = null;
@@ -164,6 +169,8 @@ export class AskController {
     const reason = front && front.pid !== process.pid ? blockedReason(front, s.neverRecord, s.projectName) : null;
     if (reason && !reason.includes("this project")) return this.notify(`Asking is off here: ${reason}.`);
 
+    this.lastAskAt = Date.now();
+    if (this.dictation) await this.cancelDictation(); // circling takes the microphone from Study Buddy
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
     this.overlayBounds = display.bounds;
@@ -287,6 +294,49 @@ export class AskController {
 
   windowFor(askId: string): BrowserWindow | null {
     return this.asks.get(askId)?.window ?? null;
+  }
+
+  // ---------- for Study Buddy ----------
+
+  /** Circling, or an Ask popup is open. */
+  isBusy(): boolean {
+    return this.tracking || this.asks.size > 0;
+  }
+
+  /** When you last started circling (-Infinity if not this session). */
+  lastAskTime(): number {
+    return this.asks.size ? Date.now() : this.lastAskAt;
+  }
+
+  /** Voice is set up and allowed for this session. */
+  canDictate(): boolean {
+    return !!this.voice && this.voiceReady && !this.tracking;
+  }
+
+  /** Microphone on for a spoken answer to Study Buddy; `onEvent` gets the words heard so far and the level. */
+  async startDictation(onEvent: (e: VoiceEvent) => void): Promise<void> {
+    if (!this.voice || !this.voiceReady || this.tracking) throw new Error("Voice isn't available right now.");
+    this.dictation = onEvent;
+    try {
+      await this.voice.start(this.settings.ask.locale);
+    } catch (err) {
+      this.dictation = null;
+      throw err;
+    }
+  }
+
+  /** Microphone off; resolves with what was said. */
+  async stopDictation(): Promise<string> {
+    if (!this.dictation || !this.voice) return "";
+    this.dictation = null;
+    return this.voice.stop().catch(() => "");
+  }
+
+  /** Microphone off, words discarded. */
+  async cancelDictation(): Promise<void> {
+    if (!this.dictation) return;
+    this.dictation = null;
+    await this.voice?.cancel().catch(() => {});
   }
 
   isOverlay(win: BrowserWindow | null): boolean {

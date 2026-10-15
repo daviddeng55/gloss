@@ -181,6 +181,7 @@ export class ReviewService {
         error: p.quizError,
       },
       connections: this.learner.connections(sessionId, s.courseId),
+      buddy: this.db.buddyChats(sessionId),
       passages: Object.fromEntries(
         s.chunks.map((c) => [c.id, { text: c.text, sourceTitle: c.sourceTitle, capturedAt: c.capturedAt }]),
       ),

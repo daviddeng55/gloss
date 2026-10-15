@@ -1,7 +1,7 @@
 // The only bridge between the windows and the main process. Windows get `window.api` and
 // nothing else: no file system or Node access.
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppState, AskEvent, OverlayEvent, PopoverView, StudyApi } from "../shared/types.ts";
+import type { AppState, AskEvent, BuddyView, OverlayEvent, PopoverView, StudyApi } from "../shared/types.ts";
 
 const api: StudyApi = {
   getCourses: () => ipcRenderer.invoke("courses:list"),
@@ -69,6 +69,18 @@ const api: StudyApi = {
     ipcRenderer.on("review", listener);
     return () => ipcRenderer.removeListener("review", listener);
   },
+  getBuddyView: () => ipcRenderer.invoke("buddy:view"),
+  onBuddyView: (callback) => {
+    const listener = (_e: unknown, view: BuddyView) => callback(view);
+    ipcRenderer.on("buddy:view", listener);
+    return () => ipcRenderer.removeListener("buddy:view", listener);
+  },
+  buddyAnswer: (text) => ipcRenderer.invoke("buddy:answer", text),
+  buddyMic: () => ipcRenderer.invoke("buddy:mic"),
+  buddyNotNow: () => ipcRenderer.invoke("buddy:not-now"),
+  buddyPauseSession: () => ipcRenderer.invoke("buddy:pause"),
+  getBuddySettings: () => ipcRenderer.invoke("buddy:settings"),
+  chooseBuddy: (choice) => ipcRenderer.invoke("buddy:choose", choice),
   onState: (callback) => {
     const listener = (_e: unknown, state: AppState) => callback(state);
     ipcRenderer.on("state", listener);

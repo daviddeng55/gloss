@@ -28,3 +28,4 @@ sessions/
 *.wav
 *.caf
 *.log
+!design/screenshots/*.png

@@ -8,15 +8,17 @@ import Warmup from "./Warmup.tsx";
 import Overlay from "./Overlay.tsx";
 import Review from "./Review.tsx";
 import Popover from "./Popover.tsx";
+import BuddyWindow from "./BuddyWindow.tsx";
+import BuddyPick from "./BuddyPick.tsx";
 import "./index.css";
 
 // One page, several screens: #/popover (menu bar), #/history[/<topic>[/<section>]] (Notes + All captures),
-// #/review/<session>[/summary|quiz], #/overlay, #/ask/<ask>.
+// #/review/<session>[/summary|quiz], #/overlay, #/ask/<ask>, #/buddy (Study Buddy), #/buddy-pick.
 const [route, param, extra] = location.hash.replace(/^#\/?/, "").split("/");
 // A window reused for another screen (e.g. the review window opened again at the quiz) only changes the
 // hash, which doesn't reload the page: reload so the new screen shows.
 window.addEventListener("hashchange", () => location.reload());
-document.body.className = ["popover", "overlay", "ask"].includes(route) ? "bg-transparent" : "bg-paper";
+document.body.className = ["popover", "overlay", "ask", "buddy"].includes(route) ? "bg-transparent" : "bg-paper";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -26,6 +28,10 @@ createRoot(document.getElementById("root")!).render(
       <Overlay />
     ) : route === "ask" && param ? (
       <Ask askId={param} />
+    ) : route === "buddy" ? (
+      <BuddyWindow />
+    ) : route === "buddy-pick" ? (
+      <BuddyPick />
     ) : route === "settings" ? (
       <Settings />
     ) : route === "learn" ? (

@@ -1,6 +1,7 @@
 // User settings in settings.json (project folder). Anything missing uses the default.
 import { existsSync, readFileSync } from "node:fs";
 import { DEFAULT_CROP, type CropOptions } from "./crop.ts";
+import type { BuddySettings } from "../shared/types.ts";
 
 export type Settings = {
   /** Which local models to use: `review` for summaries, quizzes and marking; `ask` for circle-and-ask. */
@@ -9,6 +10,8 @@ export type Settings = {
   capture: { intervalSeconds: number; dwellSeconds: number };
   /** Offer help when it looks like you're stuck (never interrupts on its own). */
   learn: { offerHelpWhenStuck: boolean };
+  /** Study Buddy: a character who asks you to explain what you just finished. */
+  buddy: BuddySettings;
   ask: CropOptions & {
     /** Press to start circling, press again (or click) to send. Electron accelerator syntax; "Alt" = Option. */
     shortcut: string;
@@ -21,6 +24,7 @@ export const DEFAULT_SETTINGS_FILE: Settings = {
   ai: { reviewModel: "qwen3.5:4b", askModel: "qwen3.5:4b" },
   capture: { intervalSeconds: 5, dwellSeconds: 8 },
   learn: { offerHelpWhenStuck: true },
+  buddy: { enabled: true, character: "", name: "", minMinutes: 15 },
   ask: { shortcut: "Alt+A", voice: true, locale: "en-US", ...DEFAULT_CROP },
 };
 
@@ -32,6 +36,7 @@ export function loadSettings(path: string): Settings {
       ai: { ...DEFAULT_SETTINGS_FILE.ai, ...(raw.ai ?? {}) },
       capture: { ...DEFAULT_SETTINGS_FILE.capture, ...(raw.capture ?? {}) },
       learn: { ...DEFAULT_SETTINGS_FILE.learn, ...(raw.learn ?? {}) },
+      buddy: { ...DEFAULT_SETTINGS_FILE.buddy, ...(raw.buddy ?? {}) },
       ask: { ...DEFAULT_SETTINGS_FILE.ask, ...(raw.ask ?? {}) },
     };
   } catch {
@@ -54,6 +59,12 @@ export function sanitizeSettings(s: Settings): Settings {
       dwellSeconds: clamp(s.capture?.dwellSeconds, 0, 60, d.capture.dwellSeconds),
     },
     learn: { offerHelpWhenStuck: s.learn?.offerHelpWhenStuck !== false },
+    buddy: {
+      enabled: s.buddy?.enabled !== false,
+      character: (["dog", "cat", "penguin", "birdie"] as const).find((c) => c === s.buddy?.character) ?? "",
+      name: String(s.buddy?.name ?? "").replace(/\s+/g, " ").trim().slice(0, 24),
+      minMinutes: clamp(s.buddy?.minMinutes, 10, 120, d.buddy.minMinutes),
+    },
     ask: {
       shortcut: String(s.ask?.shortcut || d.ask.shortcut).slice(0, 40),
       voice: s.ask?.voice !== false,

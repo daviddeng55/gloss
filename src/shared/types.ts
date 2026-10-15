@@ -8,6 +8,7 @@ export type SettingsView = {
     ai: { reviewModel: string; askModel: string };
     capture: { intervalSeconds: number; dwellSeconds: number };
     learn: { offerHelpWhenStuck: boolean };
+    buddy: BuddySettings;
     ask: { shortcut: string; voice: boolean; locale: string; fallbackW: number; fallbackH: number; padding: number; minCircle: number };
   };
   courses: Course[];
@@ -15,6 +16,41 @@ export type SettingsView = {
   models?: { math: string; memory: string };
   installed?: string[];
   aiProblem?: string;
+};
+
+// ---------- Study Buddy ----------
+
+export type BuddyCharacterId = "dog" | "cat" | "penguin" | "birdie";
+export type BuddySettings = {
+  enabled: boolean;
+  character: BuddyCharacterId | ""; // "" = not chosen yet (the picker opens)
+  name: string;
+  minMinutes: number; // at most one appearance per this many minutes
+};
+export type BuddyMoodId = "idle" | "asking" | "thinking" | "happy" | "confused" | "thanks";
+
+/** One chat with the buddy, as the review window shows it (no grades). */
+export type BuddyChatView = {
+  id: string;
+  topic: string;
+  character: string;
+  buddyName: string;
+  startedAt: string;
+  turns: { who: "buddy" | "you"; text: string; at: string }[];
+  outcome: "understood" | "gap" | "skipped" | null;
+};
+
+/** What the buddy window shows. */
+export type BuddyView = {
+  character: BuddyCharacterId;
+  name: string;
+  mood: BuddyMoodId;
+  line: string; // the speech bubble
+  canAnswer: boolean; // waiting for your answer
+  voice: "off" | "ready" | "listening" | "unavailable";
+  partial?: string; // words heard so far
+  level?: number; // microphone level 0–1
+  done: boolean; // about to leave
 };
 
 export type SessionRow = {
@@ -127,6 +163,7 @@ export type ReviewData = {
   quiz: { status: TaskStatus; items: QuizItemView[]; note?: string; error?: string };
   passages: Record<string, { text: string; sourceTitle: string; capturedAt: string }>;
   connections: Connection[];
+  buddy: BuddyChatView[];
 };
 
 export type AnswerResult = { correct: boolean; answer: string; explanation: string };
@@ -262,4 +299,15 @@ export interface StudyApi {
   /** Notes changed (a topic was written or updated, or writing started/stopped). */
   onNotes(callback: () => void): () => void;
   foundText(chunkId: string, query: string): Promise<string | null>;
+  // Study Buddy
+  getBuddyView(): Promise<BuddyView | null>;
+  onBuddyView(callback: (view: BuddyView) => void): () => void;
+  buddyAnswer(text: string): Promise<void>;
+  /** Microphone: first press listens, second press answers with what was heard. */
+  buddyMic(): Promise<void>;
+  buddyNotNow(): Promise<void>;
+  buddyPauseSession(): Promise<void>;
+  getBuddySettings(): Promise<BuddySettings>;
+  /** From the first-launch picker: a character and name, "later" (ask again next launch) or "off". */
+  chooseBuddy(choice: { character: BuddyCharacterId; name: string } | "later" | "off"): Promise<void>;
 }

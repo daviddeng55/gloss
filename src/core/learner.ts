@@ -5,6 +5,7 @@
 //   covered — you studied it in a session (small start, no proof you understood it)
 //   quiz    — you answered a quiz question on it (right or wrong): the strongest signal
 //   ask     — you asked about it; the highest hint level you needed says how stuck you were
+//   explain — you explained it to your Study Buddy: solid, or with a gap (weaker than a quiz answer)
 //   manual  — you told us ("I know this" / "I don't")
 //
 // Mastery fades if you don't practise: it halves after a "half-life" that starts at 3 days and doubles
@@ -14,8 +15,8 @@ export type HintLevelName = "nudge" | "explain" | "example";
 
 export type Evidence = {
   at: string;
-  kind: "covered" | "quiz" | "ask" | "manual";
-  correct?: boolean; // quiz; manual: true = "I know this", false = "I don't"
+  kind: "covered" | "quiz" | "ask" | "explain" | "manual";
+  correct?: boolean; // quiz; explain: true = solid explanation; manual: true = "I know this", false = "I don't"
   hintLevel?: HintLevelName; // ask: highest level you needed
 };
 
@@ -27,6 +28,7 @@ export type ConceptState = {
   lastPracticedAt?: string;
   helps: Record<HintLevelName, number>; // which help level preceded getting it right
   quizzes: { right: number; wrong: number };
+  explained: { solid: number; gaps: number };
   asks: number;
   why: string[]; // short, readable reasons for the current number
 };
@@ -43,6 +45,7 @@ export function conceptState(evidence: Evidence[], now = Date.now()): ConceptSta
   let lastPracticed: number | undefined;
   const helps: Record<HintLevelName, number> = { nudge: 0, explain: 0, example: 0 };
   const quizzes = { right: 0, wrong: 0 };
+  const explained = { solid: 0, gaps: 0 };
   let asks = 0;
   let pendingHelp: HintLevelName | null = null; // the help you got, waiting to see if it worked
   let override: boolean | null = null;
@@ -69,6 +72,18 @@ export function conceptState(evidence: Evidence[], now = Date.now()): ConceptSta
       }
       pendingHelp = null;
       weight += 1;
+      lastPracticed = t;
+    } else if (e.kind === "explain") {
+      // Explaining it in your own words is good evidence, but a chat is looser than a quiz question.
+      if (e.correct) {
+        mastery += (1 - mastery) * 0.25;
+        halfLife = Math.min(60, halfLife * 1.5);
+        explained.solid++;
+      } else {
+        mastery -= mastery * 0.2;
+        explained.gaps++;
+      }
+      weight += 0.75;
       lastPracticed = t;
     } else if (e.kind === "ask") {
       asks++;
@@ -99,6 +114,9 @@ export function conceptState(evidence: Evidence[], now = Date.now()): ConceptSta
     why.push("You marked this as not known yet.");
   }
   if (quizzes.right + quizzes.wrong) why.push(`Quiz: ${quizzes.right} right, ${quizzes.wrong} wrong.`);
+  if (explained.solid + explained.gaps) {
+    why.push(`Explained to your Study Buddy: ${explained.solid} solid, ${explained.gaps} with a gap.`);
+  }
   if (asks) why.push(`You asked about it ${asks} time${asks === 1 ? "" : "s"}.`);
   if (days >= 1 && mastery - current > 0.05) {
     why.push(`Not practised for ${Math.round(days)} day${Math.round(days) === 1 ? "" : "s"}, so it has faded a little.`);
@@ -113,6 +131,7 @@ export function conceptState(evidence: Evidence[], now = Date.now()): ConceptSta
     lastPracticedAt: lastPracticed !== undefined ? new Date(lastPracticed).toISOString() : undefined,
     helps,
     quizzes,
+    explained,
     asks,
     why,
   };

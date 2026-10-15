@@ -2,6 +2,7 @@
 // and the rules for using Gloss. Saved to settings.json / courses.json / never-record.json.
 import { useEffect, useState, type ReactNode } from "react";
 import type { SettingsView } from "../../shared/types.ts";
+import { BuddyChooser } from "./Buddy.tsx";
 
 function Section({ title, children, note }: { title: string; children: ReactNode; note?: string }) {
   return (
@@ -166,6 +167,24 @@ export default function Settings() {
             <Row label="Read a page after it's been in front for" hint="Quick tab switches shorter than this are never recorded.">
               <NumberInput value={s.settings.capture.dwellSeconds} min={0} max={60} suffix="seconds" onChange={(n) => update((d) => void (d.settings.capture.dwellSeconds = n))} />
             </Row>
+          </Section>
+
+          <Section title="Study Buddy" note="After you finish something, your buddy asks you to explain it, like a curious classmate. No grades; your answers quietly update How You Learn.">
+            <Row label="Study Buddy" hint="Never while you're reading, typing or asking.">
+              <Toggle on={s.settings.buddy.enabled} onChange={(b) => update((d) => void (d.settings.buddy.enabled = b))} />
+            </Row>
+            {s.settings.buddy.enabled ? (
+              <>
+                <BuddyChooser
+                  character={s.settings.buddy.character}
+                  name={s.settings.buddy.name}
+                  onChange={(c) => update((d) => void Object.assign(d.settings.buddy, c))}
+                />
+                <Row label="Appear at most every" hint="“Not now” in the buddy's window also gives you 20 minutes.">
+                  <NumberInput value={s.settings.buddy.minMinutes} min={10} max={120} suffix="minutes" onChange={(n) => update((d) => void (d.settings.buddy.minMinutes = n))} />
+                </Row>
+              </>
+            ) : null}
           </Section>
 
           <Section title="Learning">

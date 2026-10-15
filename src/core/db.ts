@@ -3,11 +3,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import type { ChunkRow, FoundMoment, NoteTopic, NoteTree, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
+import type { BuddyChatView, ChunkRow, FoundMoment, NoteTopic, NoteTree, QuestionRow, QuizItemView, SessionDetail, SessionRow, SummaryData } from "../shared/types.ts";
 import type { Passage, QuizDraft } from "./ai.ts";
 import { conceptKey, type Evidence, type HintLevelName } from "./learner.ts";
 import type { NoteSectionDraft } from "./notes.ts";
 import type { NewChunk } from "./chunker.ts";
+import type { BuddyTurn } from "./buddy.ts";
 import { MATCH_END, MATCH_START, toFtsQuery } from "../shared/search.ts";
 
 // Each entry upgrades the database by one version. Never edit a released entry; add a new one.
@@ -161,6 +162,21 @@ const MIGRATIONS = [
    CREATE TRIGGER note_sections_fts_update AFTER UPDATE OF title, body ON note_sections BEGIN
      UPDATE notes_fts SET title = new.title, body = new.body WHERE rowid = new.seq;
    END;`,
+  // 7: Study Buddy — each chat with the buddy (its question, your answers, its reactions), shown in the
+  // session's review. The AI's verdict on each answer is kept for the learner model, never shown.
+  `CREATE TABLE buddy_chats (
+     id         TEXT PRIMARY KEY,
+     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     course_id  TEXT NOT NULL,
+     concept_id TEXT,
+     topic      TEXT NOT NULL,              -- what it asked about
+     character  TEXT NOT NULL,              -- dog | cat | penguin | birdie
+     buddy_name TEXT NOT NULL,
+     started_at TEXT NOT NULL,
+     turns      TEXT NOT NULL DEFAULT '[]', -- JSON [{who: buddy|you, text, at, verdict?}]
+     outcome    TEXT                        -- NULL = open | understood | gap | skipped
+   );
+   CREATE INDEX buddy_chats_session ON buddy_chats(session_id, started_at);`,
 ];
 
 type Row = Record<string, any>;
@@ -792,6 +808,35 @@ export class StudyDb {
       .prepare("UPDATE sessions SET summary = NULL, quiz_note = NULL, quiz_correct = NULL, quiz_total = NULL WHERE id = ?")
       .run(sessionId);
     this.db.exec("COMMIT");
+  }
+
+  // ---------- Study Buddy ----------
+
+  addBuddyChat(c: { sessionId: string; courseId: string; conceptId?: string; topic: string; character: string; buddyName: string; turns: BuddyTurn[] }): string {
+    const id = randomUUID();
+    this.db
+      .prepare("INSERT INTO buddy_chats (id, session_id, course_id, concept_id, topic, character, buddy_name, started_at, turns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, c.sessionId, c.courseId, c.conceptId ?? null, c.topic.slice(0, 200), c.character, c.buddyName.slice(0, 40), new Date().toISOString(), JSON.stringify(c.turns));
+    return id;
+  }
+
+  updateBuddyChat(id: string, u: { turns: BuddyTurn[]; outcome?: BuddyChatView["outcome"]; conceptId?: string }) {
+    this.db
+      .prepare("UPDATE buddy_chats SET turns = ?, outcome = COALESCE(?, outcome), concept_id = COALESCE(?, concept_id) WHERE id = ?")
+      .run(JSON.stringify(u.turns), u.outcome ?? null, u.conceptId ?? null, id);
+  }
+
+  /** A session's buddy chats, oldest first, without the AI's verdicts. */
+  buddyChats(sessionId: string): BuddyChatView[] {
+    return (this.db.prepare("SELECT * FROM buddy_chats WHERE session_id = ? ORDER BY started_at").all(sessionId) as Row[]).map((r) => ({
+      id: r.id,
+      topic: r.topic,
+      character: r.character,
+      buddyName: r.buddy_name,
+      startedAt: r.started_at,
+      turns: (JSON.parse(r.turns) as BuddyTurn[]).filter((t) => t.text).map(({ who, text, at }) => ({ who, text, at })),
+      outcome: r.outcome ?? null,
+    }));
   }
 
   close() {

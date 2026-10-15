@@ -155,7 +155,7 @@ test("upgrading an older database backs it up first and indexes the existing pas
     db.close();
     // Turn it back into a version-4 database (before "Find it").
     const raw = new DatabaseSync(path);
-    raw.exec(`DROP TABLE notes_fts; DROP TABLE note_sections; DROP TABLE topics;
+    raw.exec(`DROP TABLE buddy_chats; DROP TABLE notes_fts; DROP TABLE note_sections; DROP TABLE topics;
               ALTER TABLE sessions DROP COLUMN notes_status; ALTER TABLE sessions DROP COLUMN notes_error;
               DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update;
               DROP TABLE chunks_fts; ALTER TABLE chunks DROP COLUMN fts_rowid; PRAGMA user_version = 4;`);
@@ -170,4 +170,23 @@ test("upgrading an older database backs it up first and indexes the existing pas
   } finally {
     rmSync(dir, { recursive: true });
   }
+});
+
+test("Study Buddy chats are saved with the session, shown without grades, and deleted with it", () => {
+  const db = new StudyDb(":memory:");
+  const s = db.createSession({ courseId: "math135", startedAt: "2026-10-15T14:00:00.000Z" });
+  const id = db.addBuddyChat({ sessionId: s, courseId: "math135", topic: "Strong induction", character: "cat", buddyName: "Miso", turns: [{ who: "buddy", text: "Why?", at: "t1" }] });
+  db.updateBuddyChat(id, {
+    turns: [
+      { who: "buddy", text: "Why?", at: "t1" },
+      { who: "you", text: "Because.", at: "t2", verdict: "gap" },
+    ],
+    outcome: "gap",
+  });
+  const [chat] = db.buddyChats(s);
+  assert.equal(chat.outcome, "gap");
+  assert.deepEqual(chat.turns[1], { who: "you", text: "Because.", at: "t2" }); // the verdict stays private
+  db.deleteSession(s);
+  assert.equal(db.buddyChats(s).length, 0);
+  db.close();
 });

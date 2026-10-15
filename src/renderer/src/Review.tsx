@@ -1,6 +1,7 @@
 // End-of-session review: what you covered, then a short quiz on it.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AnswerResult, QuizItemView, ReviewData } from "../../shared/types.ts";
+import type { AnswerResult, BuddyChatView, QuizItemView, ReviewData } from "../../shared/types.ts";
+import { BuddyFigure } from "./Buddy.tsx";
 import { plainMathToLatex } from "../../shared/mathText.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
 import Rich from "./Rich.tsx";
@@ -64,12 +65,52 @@ export default function Review({ sessionId, section }: { sessionId: string; sect
             </section>
           ) : null}
 
+          {data.buddy.length ? (
+            <section id="buddy" className="mb-12 scroll-mt-4">
+              <h2 className="mb-4 font-serif text-[21px] font-semibold">Chats with your Study Buddy</h2>
+              <div className="space-y-4">
+                {data.buddy.map((c) => (
+                  <BuddyChat key={c.id} chat={c} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           <section id="review-quiz" className="min-h-[calc(100vh-7rem)] scroll-mt-4">
             <h2 className="mb-4 font-serif text-[21px] font-semibold">Quiz</h2>
             <QuizView data={data} onRetry={() => void window.api.retryReview(sessionId)} reload={load} />
           </section>
         </article>
       </div>
+    </div>
+  );
+}
+
+/** One chat with the buddy: its questions and your answers (no grades). */
+function BuddyChat({ chat }: { chat: BuddyChatView }) {
+  const character = (["dog", "cat", "penguin", "birdie"] as const).find((c) => c === chat.character) ?? "dog";
+  return (
+    <div className="card p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <BuddyFigure character={character} size={36} />
+        <p className="eyebrow">
+          {chat.buddyName} · {chat.topic} · {timeFmt.format(new Date(chat.startedAt))}
+        </p>
+      </div>
+      <ul className="space-y-2">
+        {chat.turns.map((t, i) => (
+          <li key={i} className={`flex ${t.who === "you" ? "justify-end" : ""}`}>
+            <p
+              className={`selectable max-w-[85%] rounded-2xl px-3.5 py-2 font-serif text-[15px] leading-snug ${
+                t.who === "you" ? "rounded-br-md bg-accent-soft" : "rounded-bl-md bg-hover"
+              }`}
+            >
+              {t.text}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {chat.outcome === "skipped" && chat.turns.length === 1 ? <p className="mt-2 text-[12px] text-muted">You skipped this one.</p> : null}
     </div>
   );
 }
