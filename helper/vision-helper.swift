@@ -339,6 +339,17 @@ func handle(_ req: [String: Any]) async -> [String: Any] {
             return ["ok": true, "blocks": blocks, "width": image.width, "height": image.height,
                     "ms": Int(Date().timeIntervalSince(t0) * 1000)]
 
+        case "ocrImage":
+            // Reads the text in a JPEG/PNG sent as base64 (e.g. a circled crop), in memory only.
+            // Doesn't replace `lastImage`, so the math pass is unaffected.
+            guard let data = Data(base64Encoded: req["data"] as? String ?? ""),
+                  let src = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { throw HelperError.noImage }
+            let t0 = Date()
+            let blocks = try await recognize(image, OCROptions(req))
+            return ["ok": true, "blocks": blocks, "width": image.width, "height": image.height,
+                    "ms": Int(Date().timeIntervalSince(t0) * 1000)]
+
         case "image":
             guard let img = lastImage else { throw HelperError.noImage }
             let out = try jpegBase64(img, rect: req["rect"] as? [String: Double], maxWidth: req["maxWidth"] as? Int ?? 1400)
