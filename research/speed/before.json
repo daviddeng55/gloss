@@ -1,0 +1,165 @@
+{
+  "label": "before: qwen3.5:4b on Ollama",
+  "at": "2026-10-23T05:40:44.311Z",
+  "session": "fb2d1816-970a-46b6-8759-c858586dc27f",
+  "passages": 15,
+  "second": "a2768f5d-d295-45f8-8173-37100723f2b7",
+  "results": [
+    {
+      "task": "summary",
+      "start": "cold",
+      "firstWordMs": 25419,
+      "totalMs": 56586,
+      "loadMs": 3577,
+      "calls": 1,
+      "where": [
+        "ollama:qwen3.5:4b"
+      ],
+      "detail": [
+        {
+          "where": "ollama",
+          "model": "qwen3.5:4b",
+          "atMs": 3,
+          "loadMs": 3577,
+          "firstMs": 21839,
+          "totalMs": 53004
+        }
+      ]
+    },
+    {
+      "task": "summary",
+      "start": "warm",
+      "firstWordMs": 11947,
+      "totalMs": 37703,
+      "loadMs": 0,
+      "calls": 1,
+      "where": [
+        "ollama:qwen3.5:4b"
+      ],
+      "detail": [
+        {
+          "where": "ollama",
+          "model": "qwen3.5:4b",
+          "atMs": 1,
+          "loadMs": 0,
+          "firstMs": 11945,
+          "totalMs": 37699
+        }
+      ]
+    },
+    {
+      "task": "ask",
+      "start": "cold",
+      "firstWordMs": 15369,
+      "totalMs": 20074,
+      "loadMs": 3589,
+      "calls": 3,
+      "where": [
+        "ollama:embeddinggemma",
+        "ollama:qwen3.5:4b"
+      ],
+      "detail": [
+        {
+          "where": "ollama",
+          "model": "embeddinggemma",
+          "atMs": 8,
+          "loadMs": 1,
+          "firstMs": null,
+          "totalMs": 1069
+        },
+        {
+          "where": "ollama",
+          "model": "embeddinggemma",
+          "atMs": 1091,
+          "loadMs": 0,
+          "firstMs": null,
+          "totalMs": 16
+        },
+        {
+          "where": "ollama",
+          "model": "qwen3.5:4b",
+          "atMs": 1119,
+          "loadMs": 3588,
+          "firstMs": 10653,
+          "totalMs": 15358
+        }
+      ]
+    },
+    {
+      "task": "ask",
+      "start": "warm",
+      "firstWordMs": 15093,
+      "totalMs": 20261,
+      "loadMs": 3074,
+      "calls": 3,
+      "where": [
+        "ollama:embeddinggemma",
+        "ollama:qwen3.5:4b"
+      ],
+      "detail": [
+        {
+          "where": "ollama",
+          "model": "embeddinggemma",
+          "atMs": 8,
+          "loadMs": 8,
+          "firstMs": null,
+          "totalMs": 803
+        },
+        {
+          "where": "ollama",
+          "model": "embeddinggemma",
+          "atMs": 956,
+          "loadMs": 0,
+          "firstMs": null,
+          "totalMs": 13
+        },
+        {
+          "where": "ollama",
+          "model": "qwen3.5:4b",
+          "atMs": 980,
+          "loadMs": 3066,
+          "firstMs": 11041,
+          "totalMs": 16209
+        }
+      ]
+    },
+    {
+      "task": "ask",
+      "start": "warm",
+      "firstWordMs": 15334,
+      "totalMs": 26572,
+      "loadMs": 3339,
+      "calls": 3,
+      "where": [
+        "ollama:embeddinggemma",
+        "ollama:qwen3.5:4b"
+      ],
+      "detail": [
+        {
+          "where": "ollama",
+          "model": "embeddinggemma",
+          "atMs": 7,
+          "loadMs": 6,
+          "firstMs": null,
+          "totalMs": 802
+        },
+        {
+          "where": "ollama",
+          "model": "embeddinggemma",
+          "atMs": 977,
+          "loadMs": 0,
+          "firstMs": null,
+          "totalMs": 18
+        },
+        {
+          "where": "ollama",
+          "model": "qwen3.5:4b",
+          "atMs": 1000,
+          "loadMs": 3333,
+          "firstMs": 10996,
+          "totalMs": 22234
+        }
+      ]
+    }
+  ]
+}
