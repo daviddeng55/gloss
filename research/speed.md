@@ -41,6 +41,32 @@ embedding model, which unloaded qwen ("one model at a time"), so qwen had to loa
 - Summary points now appear one by one as they're written (the first after ~12–25 s instead of all at ~40–55 s).
 - Summary differences (±5 s) are run-to-run noise: the model work is the same.
 
-## After, fast mode (Gemini)
+## After, fast mode (Gemini, `gemini-3.5-flash-lite`)
 
-To be measured once a key is saved in Settings → Fast mode.
+| | Load | First word | Total |
+|---|---|---|---|
+| Summary, cold | 0 | **1.0 s** | **1.8 s** |
+| Summary, warm | 0 | 1.6 s | 2.5 s |
+| Ask, cold | 0 ¹ | **1.6 s** | **1.7 s** |
+| Ask, warm | 0 | 1.2 s | 1.5 s |
+| Ask, warm (2nd question) | 0 | 1.0 s | 4.4 s |
+
+¹ 0.8 s of the cold ask is the embedding model loading on the Mac (finding related notes stays local).
+One run each over home Wi-Fi, so expect ±1 s. A spot check of the answer (the squeeze-theorem crop, "why does
+dividing by n keep the inequality the same?") was a correct, short nudge that used the picture.
+
+**Bug found by the first fast-mode run, fixed:** one summary request never finished: Gemini's stream stayed
+open until Gloss's 2-minute limit, and only then fell back to the local model (183 s in all). It didn't happen
+again in 3 retries. Gloss now stops reading as soon as Gemini marks the answer finished, gives up after 15 s of
+silence mid-answer (20 s before the first word), caps replies at 8,192 tokens / 60,000 characters, and the
+overall limit is 90 s, so a stuck cloud call falls back within seconds instead of minutes.
+
+## Side by side (first word / total)
+
+| | Before (local) | After, local | After, fast mode |
+|---|---|---|---|
+| Summary, cold | 25.4 s / 56.6 s | 22.7 s / 48.2 s | **1.0 s / 1.8 s** |
+| Summary, warm | 11.9 s / 37.7 s | 11.4 s / 33.4 s | **1.6 s / 2.5 s** |
+| Ask, cold | 15.4 s / 20.1 s | 15.9 s / 20.3 s | **1.6 s / 1.7 s** |
+| Ask, warm | 15.1 s / 20.3 s | 7.5 s / 13.6 s | **1.2 s / 1.5 s** |
+| Ask, warm (2nd) | 15.3 s / 26.6 s | 8.4 s / 19.0 s | **1.0 s / 4.4 s** |

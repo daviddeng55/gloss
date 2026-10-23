@@ -178,6 +178,10 @@ export const GEMINI_FAST_MODEL = "gemini-3.5-flash-lite";
 
 /** Gemini replies must start within this long, or we give up and use the local model instead. */
 const FIRST_PIECE_MS = 20_000;
+/** Once started, a reply that goes quiet this long has stalled (Gemini normally sends pieces every ~0.1 s). */
+const STALL_MS = 15_000;
+/** Longest reply we'll accept (a model stuck repeating itself shouldn't run until the timeout). */
+const MAX_REPLY_CHARS = 60_000;
 
 /** JPEG or PNG, from the first bytes of the base64 text. */
 function imageType(base64: string): string {
@@ -203,10 +207,12 @@ export class GeminiProvider implements ModelProvider {
   readonly name = "gemini";
   readonly baseUrl: string;
   private key: string;
+  private stallMs: number;
 
-  constructor(key: string, baseUrl = "https://generativelanguage.googleapis.com/v1beta") {
+  constructor(key: string, baseUrl = "https://generativelanguage.googleapis.com/v1beta", opts: { stallMs?: number } = {}) {
     this.key = key;
     this.baseUrl = baseUrl;
+    this.stallMs = opts.stallMs ?? STALL_MS;
   }
 
   /** Gemini's request format. Exported shape for tests via `requestBody`. */
@@ -224,7 +230,7 @@ export class GeminiProvider implements ModelProvider {
       contents,
       generationConfig: {
         temperature: req.temperature ?? 0.2,
-        ...(req.maxTokens ? { maxOutputTokens: req.maxTokens } : {}),
+        maxOutputTokens: req.maxTokens ?? 8192,
         ...(req.stop ? { stopSequences: req.stop.slice(0, 5) } : {}),
         ...(req.schema ? { responseMimeType: "application/json", responseJsonSchema: req.schema } : {}),
         ...(withThinking && !req.think ? leastThinking(req.model) : {}),
@@ -273,9 +279,16 @@ export class GeminiProvider implements ModelProvider {
   async stream(req: ChatRequest, onText: (piece: string) => boolean | void): Promise<string> {
     const abort = new AbortController();
     const giveUp = (why: string) => abort.abort(new DOMException(why, "TimeoutError"));
-    const firstTimer = setTimeout(() => giveUp("Gemini didn't start answering in time."), FIRST_PIECE_MS);
-    const timer = setTimeout(() => giveUp("Gemini took too long to answer."), req.timeoutMs ?? 120_000);
+    // Gives up if nothing arrives for a while: first while waiting for the answer to start, then (shorter)
+    // between pieces, so a connection that stalls or never closes falls back to the local model quickly.
+    let quiet = setTimeout(() => giveUp("Gemini didn't start answering in time."), FIRST_PIECE_MS);
+    const heardFrom = () => {
+      clearTimeout(quiet);
+      quiet = setTimeout(() => giveUp("Gemini stopped sending its answer."), this.stallMs);
+    };
+    const timer = setTimeout(() => giveUp("Gemini took too long to answer."), req.timeoutMs ?? 90_000);
     let stopped = false;
+    let finished = false;
     let text = "";
     try {
       const send = (withThinking: boolean) =>
@@ -302,6 +315,7 @@ export class GeminiProvider implements ModelProvider {
           const line = buffer.slice(0, nl).trim();
           buffer = buffer.slice(nl + 1);
           if (!line.startsWith("data:")) continue;
+          heardFrom();
           const part = JSON.parse(line.slice(5)) as {
             candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
             promptFeedback?: { blockReason?: string };
@@ -309,26 +323,36 @@ export class GeminiProvider implements ModelProvider {
           };
           if (part.error) throw new AiError("failed", `Gemini: ${part.error.message ?? "error"}`);
           if (part.promptFeedback?.blockReason) throw new AiError("failed", `Gemini declined this (${part.promptFeedback.blockReason}).`);
-          const piece = (part.candidates?.[0]?.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? "").join("");
-          if (!piece) continue;
-          clearTimeout(firstTimer);
-          text += piece;
-          if (onText(piece) === false) {
-            stopped = true;
-            abort.abort();
+          const candidate = part.candidates?.[0];
+          const piece = (candidate?.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? "").join("");
+          if (piece) {
+            text += piece;
+            if (text.length > MAX_REPLY_CHARS) throw new AiError("bad-output", "Gemini's answer ran on far too long.");
+            if (onText(piece) === false) {
+              stopped = true;
+              abort.abort();
+              break reading;
+            }
+          }
+          // Gemini says it's finished: done, even if the connection stays open.
+          if (candidate?.finishReason) {
+            if (candidate.finishReason !== "STOP" && candidate.finishReason !== "MAX_TOKENS" && !text) {
+              throw new AiError("failed", `Gemini stopped without answering (${candidate.finishReason}).`);
+            }
+            finished = true;
             break reading;
           }
         }
       }
       if (!text) throw new AiError("failed", "Gemini sent an empty reply.");
     } catch (err) {
-      if (stopped) return text;
+      if (stopped || (finished && text)) return text;
       if (err instanceof AiError) throw err;
       if (abort.signal.aborted) throw new AiError("failed", (abort.signal.reason as Error)?.message ?? "Gemini took too long to answer.");
       if (err instanceof SyntaxError) throw new AiError("failed", "Gemini sent a reply we couldn't read.");
       throw new AiError("offline", "Couldn't reach Gemini (no internet connection?).");
     } finally {
-      clearTimeout(firstTimer);
+      clearTimeout(quiet);
       clearTimeout(timer);
     }
     return text;

@@ -101,6 +101,27 @@ test("Gemini: rate limits, bad keys and missing models become clear errors (neve
   await assert.rejects(ask(), (e: AiError) => e.code === "offline");
 });
 
+test("Gemini: a finished answer ends at once even if the connection stays open; a stalled one gives up", async () => {
+  let stall = false;
+  const { url, server } = await fakeGemini((_req, _body, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    if (stall) return void res.write(sse([piece("Half an ans")])); // …and then nothing, connection left open
+    res.write(sse([piece("Done"), { candidates: [{ content: { parts: [{ text: "." }] }, finishReason: "STOP" }] }]));
+    // never res.end()
+  });
+  try {
+    const p = new GeminiProvider(KEY, url, { stallMs: 300 });
+    const t = performance.now();
+    assert.equal(await p.chat({ model: "gemini-x", messages: [{ role: "user", content: "hi" }] }), "Done.");
+    assert.ok(performance.now() - t < 1000, "returned without waiting for the connection to close");
+    stall = true;
+    await assert.rejects(p.chat({ model: "gemini-x", messages: [{ role: "user", content: "hi" }] }), (e: AiError) => e.code === "failed" && /stopped sending/.test(e.message));
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test("Gemini: a model that won't take the thinking setting is asked again without it", async () => {
   const bodies: any[] = [];
   const { url, server } = await fakeGemini((_req, body, res) => {
