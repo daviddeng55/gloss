@@ -143,6 +143,11 @@ export class VisionHelper {
     await this.request("forgetImage");
   }
 
+  /** Reads the text in an image given as base64 (JPEG or PNG). Memory only. */
+  ocrImage(base64: string, opts: OcrOptions = {}): Promise<OcrFileResult> {
+    return this.request("ocrImage", { data: base64, ...opts });
+  }
+
   ocrFile(path: string, opts: OcrOptions = {}): Promise<OcrFileResult> {
     return this.request("ocrFile", { path, ...opts });
   }

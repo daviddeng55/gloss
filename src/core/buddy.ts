@@ -35,6 +35,7 @@ export type Focus = {
   page: string;
   conceptId?: string;
   text?: string; // what was read while on it (latest captures), for the question
+  app?: string; // the app it was read in (fast mode only sends text from study apps)
 };
 
 /**
@@ -217,7 +218,8 @@ export class BuddyTrigger {
 export const MAX_FOLLOW_UPS = 2;
 
 export type BuddyMood = "idle" | "asking" | "thinking" | "happy" | "confused" | "thanks";
-export type BuddyTurn = { who: "buddy" | "you"; text: string; at: string; verdict?: "solid" | "gap" };
+/** `cloud`: a buddy line written by the cloud model (fast mode). */
+export type BuddyTurn = { who: "buddy" | "you"; text: string; at: string; verdict?: "solid" | "gap"; cloud?: boolean };
 
 /** What happens after the AI judges an answer. */
 export function nextStep(verdict: "solid" | "gap", followUpsSoFar: number, followUp: string): { mood: BuddyMood; ask?: string; done: boolean } {

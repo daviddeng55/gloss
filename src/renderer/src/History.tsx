@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AppState, Course, SessionDetail, SessionRow } from "../../shared/types.ts";
 import { plainMathToLatex } from "../../shared/mathText.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
+import CloudTag from "./CloudTag.tsx";
 import Rich from "./Rich.tsx";
 
 export default function History(props: { onBack: () => void; initialSessionId?: string; highlightChunkId?: string }) {
@@ -241,7 +242,10 @@ function SessionView(props: { s: SessionDetail; courseName: string; live: boolea
                   <div className="mt-3 space-y-3 border-t border-line pt-3">
                     {q.answers.map((a, i) => (
                       <div key={i}>
-                        <p className="eyebrow mb-1">{a.level}</p>
+                        <p className="eyebrow mb-1 flex items-center gap-2">
+                          {a.level}
+                          {a.cloud ? <CloudTag /> : null}
+                        </p>
                         <Rich text={a.text} className="font-serif text-[15px]" />
                       </div>
                     ))}

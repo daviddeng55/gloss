@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { ChunkRow, NoteKind, NoteTopic, NoteTree } from "../../shared/types.ts";
 import { notesMarkdown } from "../../shared/mathText.ts";
 import { shortDateFmt, timeFmt } from "./format.ts";
+import CloudTag from "./CloudTag.tsx";
 import History from "./History.tsx";
 import Rich from "./Rich.tsx";
 
@@ -244,6 +245,7 @@ function SourceLink({ section, open, onToggle, onCaptures }: { section: Section;
       <button onClick={onToggle} className="rounded text-[12px] text-muted transition-colors duration-150 hover:text-ink">
         from {shortDateFmt.format(at)}, {timeFmt.format(at)} {open ? "▴" : "▾"}
       </button>
+      {section.cloud ? <CloudTag className="ml-2" /> : null}
       {open && capture ? (
         <div className="appear mt-2 rounded-xl border border-line bg-paper px-4 py-3">
           <div className="mb-2 flex items-baseline justify-between gap-3">

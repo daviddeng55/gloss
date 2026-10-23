@@ -7,6 +7,7 @@ import { basename, dirname, join } from "node:path";
 import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
 import { MockProvider, provider, setProvider } from "../core/provider.ts";
 import { BuddyService } from "./buddy.ts";
+import { CloudService } from "./cloud.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
 import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
@@ -49,6 +50,7 @@ let asker: AskController;
 let learner: LearnerService;
 let notes: NotesService;
 let buddy: BuddyService;
+let cloud: CloudService;
 let pickerWin: BrowserWindow | null = null;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
@@ -607,9 +609,18 @@ function registerIpc() {
   ipcMain.handle("settings:get", async () => {
     // Downloaded models that can tutor (not the math reader or the embedding model).
     const installed = ((await provider().models()) ?? []).filter((n) => !/glm-ocr|embed/i.test(n)).sort();
-    return { ...readAllSettings(), models: { math: "glm-ocr:q8_0", memory: "embeddinggemma" }, installed, aiProblem };
+    return { ...readAllSettings(), models: { math: "glm-ocr:q8_0", memory: "embeddinggemma" }, installed, aiProblem, cloud: cloud.view() };
   });
-  ipcMain.handle("settings:save", (_e, b: unknown) => saveAllSettings(b as SettingsBundle));
+  ipcMain.handle("settings:save", (_e, b: unknown) => {
+    const r = saveAllSettings(b as SettingsBundle);
+    if (r.ok) cloud.apply(); // fast mode on/off and the model apply at once
+    return r;
+  });
+  // The key goes one way only: from the Settings window into the Keychain. It's never sent back.
+  ipcMain.handle("cloud:save-key", (_e, key: unknown) => cloud.saveKey(typeof key === "string" ? key : ""));
+  ipcMain.handle("cloud:remove-key", () => cloud.removeKey());
+  ipcMain.handle("cloud:test", () => cloud.test());
+  ipcMain.handle("cloud:view", () => cloud.view());
   ipcMain.handle("settings:open", () => {
     hidePopover();
     openSettings();
@@ -696,6 +707,9 @@ app.whenReady().then(() => {
   // GLOSS_DB lets development checks use a throwaway database.
   db = new StudyDb(process.env.GLOSS_DB ?? userDbPath());
   learner = new LearnerService(db, loadCourses);
+  cloud = new CloudService(() => loadSettings(settingsFile()));
+  void cloud.start();
+  const cloudOk = (apps: string[]) => cloud.allows(apps);
   reviews = new ReviewService(
     db,
     loadCourses,
@@ -704,6 +718,7 @@ app.whenReady().then(() => {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send("review", sessionId);
     },
     () => loadSettings(settingsFile()).ai.reviewModel,
+    cloudOk,
   );
   asker = new AskController(loadSettings(settingsFile()), {
     db,
@@ -711,6 +726,7 @@ app.whenReady().then(() => {
     load,
     voicePaths: { visionHelper: fromRoot("bin", "vision-helper"), voice: fromRoot("bin", "Gloss Voice") },
     learner,
+    cloudOk,
   });
   buddy = new BuddyService({
     db,
@@ -719,12 +735,13 @@ app.whenReady().then(() => {
     preload,
     load,
     settings: () => loadSettings(settingsFile()),
-    model: () => ({ model: loadSettings(settingsFile()).ai.askModel }),
+    model: (apps) => ({ model: loadSettings(settingsFile()).ai.askModel, cloud: cloudOk(apps) }),
   });
   notes = new NotesService({
     db,
     courses: loadCourses,
     model: () => loadSettings(settingsFile()).ai.reviewModel,
+    cloudOk,
     changed: () => {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send("notes");
     },
@@ -750,7 +767,14 @@ app.whenReady().then(() => {
   // Check the local AI every 30 s so the menu can say clearly when it isn't available.
   const checkAiNow = async () => {
     const r = await checkAi();
-    const msg = r.ok ? "" : r.error.code === "not-running" ? "Ollama isn't running — summaries and asking are off" : r.error.message;
+    const fast = cloud.view().active;
+    const msg = r.ok
+      ? ""
+      : fast
+        ? "Ollama isn't running — only fast mode (Gemini) works"
+        : r.error.code === "not-running"
+          ? "Ollama isn't running — summaries and asking are off"
+          : r.error.message;
     if (msg !== aiProblem) {
       aiProblem = msg;
       updateTray();
@@ -987,6 +1011,14 @@ async function smokeDesign(dir: string) {
     await js(reviewWin!, `(() => { const b = [...document.querySelectorAll("[data-option]")]; b[b.length - 1]?.click(); })()`);
     await wait(1200);
     await shot(reviewWin!, "quiz-answered");
+    // As if fast mode had written the summary (this is a throwaway demo database): the "Sent to cloud" label.
+    const summary = db.getSummary(main.id);
+    if (summary) {
+      db.saveSummary(main.id, { ...summary, cloud: true });
+      openReview(main.id, "summary");
+      await wait(2500);
+      await shot(reviewWin!, "summary-cloud");
+    }
     reviewWin!.close();
 
     openWarmup(main.id);
@@ -1006,6 +1038,9 @@ async function smokeDesign(dir: string) {
     openSettings();
     await wait(2500);
     await shot(settingsWin!, "settings");
+    await js(settingsWin!, `[...document.querySelectorAll("h2")].find((h) => h.textContent === "Fast mode")?.scrollIntoView()`);
+    await wait(400);
+    await shot(settingsWin!, "settings-fast");
     settingsWin!.close();
   }
   app.quit();

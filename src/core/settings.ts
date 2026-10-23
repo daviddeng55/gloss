@@ -1,11 +1,15 @@
 // User settings in settings.json (project folder). Anything missing uses the default.
 import { existsSync, readFileSync } from "node:fs";
 import { DEFAULT_CROP, type CropOptions } from "./crop.ts";
-import type { BuddySettings } from "../shared/types.ts";
+import { cleanAppList, DEFAULT_STUDY_APPS } from "./cloud.ts";
+import { GEMINI_FAST_MODEL } from "./provider.ts";
+import type { BuddySettings, CloudSettings } from "../shared/types.ts";
 
 export type Settings = {
   /** Which local models to use: `review` for summaries, quizzes and marking; `ask` for circle-and-ask. */
   ai: { reviewModel: string; askModel: string };
+  /** Fast mode: Gemini answers when an API key is saved (in the Keychain, not here) and this is on. */
+  cloud: CloudSettings;
   /** How often the screen is checked, and how long a page must stay in front before it's read. */
   capture: { intervalSeconds: number; dwellSeconds: number };
   /** Offer help when it looks like you're stuck (never interrupts on its own). */
@@ -22,6 +26,7 @@ export type Settings = {
 
 export const DEFAULT_SETTINGS_FILE: Settings = {
   ai: { reviewModel: "qwen3.5:4b", askModel: "qwen3.5:4b" },
+  cloud: { enabled: true, model: GEMINI_FAST_MODEL, studyApps: DEFAULT_STUDY_APPS },
   capture: { intervalSeconds: 5, dwellSeconds: 8 },
   learn: { offerHelpWhenStuck: true },
   buddy: { enabled: true, character: "", name: "", minMinutes: 15 },
@@ -34,6 +39,7 @@ export function loadSettings(path: string): Settings {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<Settings>;
     return {
       ai: { ...DEFAULT_SETTINGS_FILE.ai, ...(raw.ai ?? {}) },
+      cloud: { ...DEFAULT_SETTINGS_FILE.cloud, ...(raw.cloud ?? {}) },
       capture: { ...DEFAULT_SETTINGS_FILE.capture, ...(raw.capture ?? {}) },
       learn: { ...DEFAULT_SETTINGS_FILE.learn, ...(raw.learn ?? {}) },
       buddy: { ...DEFAULT_SETTINGS_FILE.buddy, ...(raw.buddy ?? {}) },
@@ -54,6 +60,11 @@ export function sanitizeSettings(s: Settings): Settings {
   const model = (m: unknown, dflt: string) => (typeof m === "string" && /^[\w.:/-]{1,80}$/.test(m) ? m : dflt);
   return {
     ai: { reviewModel: model(s.ai?.reviewModel, d.ai.reviewModel), askModel: model(s.ai?.askModel, d.ai.askModel) },
+    cloud: {
+      enabled: s.cloud?.enabled !== false,
+      model: /^gemini-[\w.-]{1,60}$/.test(String(s.cloud?.model)) ? String(s.cloud.model) : d.cloud.model,
+      studyApps: cleanAppList(s.cloud?.studyApps),
+    },
     capture: {
       intervalSeconds: clamp(s.capture?.intervalSeconds, 2, 60, d.capture.intervalSeconds),
       dwellSeconds: clamp(s.capture?.dwellSeconds, 0, 60, d.capture.dwellSeconds),

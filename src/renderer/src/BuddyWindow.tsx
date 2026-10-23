@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BuddyView } from "../../shared/types.ts";
 import { BuddyFigure } from "./Buddy.tsx";
+import CloudTag from "./CloudTag.tsx";
 
 export default function BuddyWindow() {
   const [view, setView] = useState<BuddyView | null>(null);
@@ -34,7 +35,10 @@ export default function BuddyWindow() {
         <div className="drag flex items-start gap-3">
           <BuddyFigure character={view.character} mood={view.mood} size={92} className="shrink-0 -ml-1 -mt-1" />
           <div className="min-w-0 flex-1 pt-1">
-            <p className="eyebrow">{view.name}</p>
+            <p className="eyebrow flex items-center gap-2">
+              {view.name}
+              {view.cloud ? <CloudTag className="ml-auto" /> : null}
+            </p>
             {/* the speech bubble */}
             <div key={view.line} className="appear relative mt-1.5 rounded-2xl rounded-tl-md bg-hover px-3.5 py-2.5">
               <p className="selectable font-serif text-[15px] leading-snug">{view.line}</p>

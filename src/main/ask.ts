@@ -3,7 +3,8 @@
 // cursor) is captured and a popup opens where you ask about it. Esc cancels.
 import { BrowserWindow, globalShortcut, Notification, screen } from "electron";
 import { randomUUID } from "node:crypto";
-import { askAboutImage, DEFAULT_AI, HINT_LEVELS, type HintLevel, urgently } from "../core/ai.ts";
+import { askAboutImage, DEFAULT_AI, HINT_LEVELS, type HintLevel, urgently, warmUp } from "../core/ai.ts";
+import { looksSensitive } from "../core/cloud.ts";
 import { cropFor, type Point } from "../core/crop.ts";
 import type { StudyDb } from "../core/db.ts";
 import type { VisionHelper } from "../core/helper.ts";
@@ -29,6 +30,8 @@ type Ask = {
   sessionId: string;
   courseId: string;
   imageBase64: string; // kept in memory only while the popup is open
+  /** Fast mode: may this picture go to the cloud? (from a study app, and no sensitive text in it) */
+  cloudCheck: Promise<boolean>;
   questionId?: string;
   turns: { question: string; level: HintLevel; answer: string }[];
   busy: boolean;
@@ -71,6 +74,8 @@ export class AskController {
     load: (win: BrowserWindow, route: string) => void;
     voicePaths: { visionHelper: string; voice: string };
     learner: LearnerService;
+    /** Fast mode is on and text from all these apps may go to the cloud. */
+    cloudOk: (apps: string[]) => boolean;
   };
 
   constructor(settings: Settings, deps: AskController["deps"]) {
@@ -168,6 +173,8 @@ export class AskController {
     const front = pickFrontWindow(await s.helper.windows());
     const reason = front && front.pid !== process.pid ? blockedReason(front, s.neverRecord, s.projectName) : null;
     if (reason && !reason.includes("this project")) return this.notify(`Asking is off here: ${reason}.`);
+    // A question about this window will go to the local model: load it while you circle.
+    if (!this.deps.cloudOk([front?.app ?? ""])) warmUp({ ...DEFAULT_AI, model: this.settings.ai.askModel });
 
     this.lastAskAt = Date.now();
     if (this.dictation) await this.cancelDictation(); // circling takes the microphone from Study Buddy
@@ -374,7 +381,7 @@ export class AskController {
       }
       if (shot.black) console.log("[ask] the capture is still black after retries");
       const front = pickFrontWindow(windows.filter((w) => w.pid !== process.pid));
-      this.openAsk(s, shot.jpeg, circled, front?.title ?? "", cursor, await spoken);
+      this.openAsk(s, shot.jpeg, circled, front?.title ?? "", front?.app ?? "", cursor, await spoken);
     } catch (err) {
       this.notify(`Couldn't capture the screen: ${(err as Error).message}`);
     }
@@ -382,7 +389,7 @@ export class AskController {
 
   // ---------- the ask popup ----------
 
-  private openAsk(s: AskSession, jpeg: string, circled: boolean, sourceTitle: string, near: Point, spoken = "") {
+  private openAsk(s: AskSession, jpeg: string, circled: boolean, sourceTitle: string, app: string, near: Point, spoken = "") {
     const askId = randomUUID();
     const area = screen.getDisplayNearestPoint(near).workArea;
     const x = Math.min(Math.max(near.x + 16, area.x + 8), area.x + area.width - ASK_SIZE.width - 8);
@@ -406,6 +413,14 @@ export class AskController {
       sessionId: s.sessionId,
       courseId: s.courseId,
       imageBase64: jpeg,
+      // Read the picture's text (in memory) while the popup opens: a password or card number in it keeps
+      // the question on this Mac, since part of an image can't be reliably blacked out.
+      cloudCheck: this.deps.cloudOk([app])
+        ? s.helper
+            .ocrImage(jpeg)
+            .then((r) => !looksSensitive(r.blocks.map((b) => b.text).join("\n")))
+            .catch(() => false)
+        : Promise.resolve(false),
       turns: [],
       busy: false,
       window: win,
@@ -458,8 +473,10 @@ export class AskController {
       if (requested === "auto") ({ level, reason } = learner.startLevel(a.sessionId, a.concept?.id ?? null));
       emit({ askId, type: "start", turn, level, question: q, reason, concept: a.concept?.name });
 
-      // This session's notes plus related ones from earlier sessions of the course.
-      const passages = await learner.passagesFor(a.courseId, a.sessionId, q);
+      // This session's notes plus related ones from earlier sessions of the course. When the question goes
+      // to the cloud, notes read in other apps stay behind.
+      const cloud = await a.cloudCheck;
+      const passages = (await learner.passagesFor(a.courseId, a.sessionId, q)).filter((p) => !cloud || this.deps.cloudOk([p.sourceApp ?? ""]));
       emit({
         askId,
         type: "sources",
@@ -467,13 +484,15 @@ export class AskController {
         sources: passages.map((p) => ({ title: p.sourceTitle || "unknown window", when: p.when })),
       });
       const note = learner.learnerNote(a.concept?.id ?? null, learner.connections(a.sessionId, a.courseId));
+      let fromCloud = false;
       const answer = await askAboutImage(
         { imageBase64: a.imageBase64, question: q, course: a.info.courseName, level, passages, earlier: a.turns, learner: note },
         (text) => emit({ askId, type: "text", turn, text }),
-        { ...DEFAULT_AI, model: this.settings.ai.askModel },
+        { ...DEFAULT_AI, model: this.settings.ai.askModel, cloud },
+        (c) => emit({ askId, type: "where", turn, cloud: (fromCloud = c) }),
       );
       a.turns.push({ question: q, level, answer });
-      this.deps.db.addAnswer(a.questionId!, HINT_LEVELS[level].label, answer);
+      this.deps.db.addAnswer(a.questionId!, HINT_LEVELS[level].label, answer, fromCloud);
       if (a.concept) learner.recordAsk(a.sessionId, a.questionId!, a.concept.id, level, isNew);
       emit({ askId, type: "done", turn });
     } catch (err) {

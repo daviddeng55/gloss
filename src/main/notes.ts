@@ -1,6 +1,6 @@
 // Writes class notes in the background: after each session (once its summary and quiz are done), and
 // for older sessions that don't have notes yet. One session at a time; waits while you're recording.
-import { AiError, DEFAULT_AI, tooThin } from "../core/ai.ts";
+import { AiError, DEFAULT_AI, tooThin, tracked } from "../core/ai.ts";
 import type { StudyDb } from "../core/db.ts";
 import { planTopics, topicKey, writeNotes } from "../core/notes.ts";
 import type { Course } from "../shared/types.ts";
@@ -11,6 +11,8 @@ type Deps = {
   db: StudyDb;
   courses: () => Course[];
   model: () => string;
+  /** Fast mode is on and text from all these apps may go to the cloud. */
+  cloudOk?: (apps: string[]) => boolean;
   changed: () => void; // tell the windows to refresh
   isRecording: () => boolean;
   reviewsIdle: () => Promise<void>;
@@ -76,7 +78,7 @@ export class NotesService {
       db.setNotesStatus(sessionId, "skipped", thin);
       return { topics: [], sections: 0 };
     }
-    const cfg = { ...DEFAULT_AI, model: this.deps.model() };
+    const cfg = { ...DEFAULT_AI, model: this.deps.model(), cloud: this.deps.cloudOk?.(passages.map((p) => p.sourceApp ?? "")) ?? false };
     const courses = this.deps.courses();
     const plans = await planTopics(passages, courses, courseId, db.topicTitles(), cfg);
     const done = { topics: [] as string[], sections: 0 };
@@ -85,12 +87,14 @@ export class NotesService {
       const existing = db.topicForMerge(plan.courseId, key);
       const subset = passages.filter((p) => plan.passageIds.includes(p.id));
       const courseName = courses.find((c) => c.id === plan.courseId)?.name ?? plan.courseId;
-      const notes = await writeNotes(plan.title, courseName, subset, existing ?? { summary: "", sectionTitles: [] }, cfg, {
-        otherTopics: plans.map((p) => p.title),
-        courseTitles: db.courseSectionTitles(plan.courseId),
-      });
+      const { value: notes, cloud } = await tracked(() =>
+        writeNotes(plan.title, courseName, subset, existing ?? { summary: "", sectionTitles: [] }, cfg, {
+          otherTopics: plans.map((p) => p.title),
+          courseTitles: db.courseSectionTitles(plan.courseId),
+        }),
+      );
       if (!notes.sections.length) continue;
-      db.saveTopicNotes({ courseId: plan.courseId, title: plan.title, key, summary: notes.summary, sessionId, sections: notes.sections });
+      db.saveTopicNotes({ courseId: plan.courseId, title: plan.title, key, summary: notes.summary, sessionId, sections: notes.sections, cloud });
       done.topics.push(plan.title);
       done.sections += notes.sections.length;
       this.deps.changed(); // the topic shows up while the rest is still being written

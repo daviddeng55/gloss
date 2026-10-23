@@ -2,10 +2,26 @@
 
 export type Course = { id: string; name: string; math?: boolean };
 
+/** Fast mode (Gemini in the cloud). The API key itself is in the Keychain, never here. */
+export type CloudSettings = {
+  enabled: boolean;
+  model: string; // e.g. "gemini-3.5-flash-lite"
+  studyApps: string[]; // only content read from these apps may be sent
+};
+
+/** What Settings shows about fast mode (never the key itself). */
+export type CloudView = {
+  hasKey: boolean;
+  active: boolean; // key saved and fast mode on
+  problem: string; // what last went wrong with a cloud call ("" if nothing)
+  pausedForSeconds: number; // after a rate limit or error, the cloud is left alone this long
+};
+
 /** What the Settings window edits. */
 export type SettingsView = {
   settings: {
     ai: { reviewModel: string; askModel: string };
+    cloud: CloudSettings;
     capture: { intervalSeconds: number; dwellSeconds: number };
     learn: { offerHelpWhenStuck: boolean };
     buddy: BuddySettings;
@@ -16,6 +32,7 @@ export type SettingsView = {
   models?: { math: string; memory: string };
   installed?: string[];
   aiProblem?: string;
+  cloud?: CloudView;
 };
 
 // ---------- Study Buddy ----------
@@ -36,7 +53,7 @@ export type BuddyChatView = {
   character: string;
   buddyName: string;
   startedAt: string;
-  turns: { who: "buddy" | "you"; text: string; at: string }[];
+  turns: { who: "buddy" | "you"; text: string; at: string; cloud?: boolean }[];
   outcome: "understood" | "gap" | "skipped" | null;
 };
 
@@ -47,6 +64,7 @@ export type BuddyView = {
   mood: BuddyMoodId;
   line: string; // the speech bubble
   canAnswer: boolean; // waiting for your answer
+  cloud?: boolean; // this line was written by the cloud model (fast mode)
   voice: "off" | "ready" | "listening" | "unavailable";
   partial?: string; // words heard so far
   level?: number; // microphone level 0–1
@@ -82,7 +100,7 @@ export type QuestionRow = {
   askedAt: string;
   question: string;
   sourceTitle: string;
-  answers: { level: string; text: string; at: string }[];
+  answers: { level: string; text: string; at: string; cloud?: boolean }[];
 };
 
 /**
@@ -130,6 +148,7 @@ export type NoteTopic = {
     sessionId: string;
     capturedAt?: string;
     sourceTitle?: string;
+    cloud?: boolean; // written by the cloud model (fast mode)
   }[];
 };
 
@@ -137,8 +156,8 @@ export type SessionDetail = SessionRow & { chunks: ChunkRow[]; questions: Questi
 
 /** What a session covered (or why it couldn't be summarized). */
 export type SummaryData =
-  | { ok: true; points: { text: string; passageIds: string[]; concept?: string }[] }
-  | { ok: false; reason: string };
+  | { ok: true; points: { text: string; passageIds: string[]; concept?: string }[]; cloud?: boolean }
+  | { ok: false; reason: string; cloud?: boolean };
 
 export type QuizItemView = {
   id: string;
@@ -159,14 +178,15 @@ export type ReviewData = {
   goal?: string;
   startedAt: string;
   activeMs: number;
-  summary: { status: TaskStatus; data?: SummaryData; error?: string };
-  quiz: { status: TaskStatus; items: QuizItemView[]; note?: string; error?: string };
+  /** `partial`: the points written so far, while the summary is still being written. */
+  summary: { status: TaskStatus; data?: SummaryData; error?: string; partial?: string[] };
+  quiz: { status: TaskStatus; items: QuizItemView[]; note?: string; error?: string; cloud?: boolean; step?: "writing" | "checking" };
   passages: Record<string, { text: string; sourceTitle: string; capturedAt: string }>;
   connections: Connection[];
   buddy: BuddyChatView[];
 };
 
-export type AnswerResult = { correct: boolean; answer: string; explanation: string };
+export type AnswerResult = { correct: boolean; answer: string; explanation: string; cloud?: boolean };
 
 // ---------- Stage 5: the learner model ----------
 
@@ -228,6 +248,8 @@ export type AskEvent =
   | { askId: string; type: "start"; turn: number; level: HintLevelId; question: string; reason?: string; concept?: string }
   | { askId: string; type: "sources"; turn: number; sources: { title: string; when: string }[] }
   | { askId: string; type: "text"; turn: number; text: string }
+  /** Which model is answering; sent again (clear what was shown) if the cloud model failed partway. */
+  | { askId: string; type: "where"; turn: number; cloud: boolean }
   | { askId: string; type: "done"; turn: number }
   | { askId: string; type: "error"; turn: number; message: string };
 
@@ -266,6 +288,11 @@ export interface StudyApi {
   deleteSession(sessionId: string): Promise<void>;
   getSettings(): Promise<SettingsView>;
   saveSettings(s: SettingsView): Promise<{ ok: boolean; message?: string }>;
+  /** Fast mode: the key is checked, then stored in the macOS Keychain (never sent back to a window). */
+  saveCloudKey(key: string): Promise<{ ok: boolean; message: string }>;
+  removeCloudKey(): Promise<void>;
+  testCloud(): Promise<{ ok: boolean; message: string }>;
+  cloudView(): Promise<CloudView>;
   openSettings(): Promise<void>;
   deleteCourseData(courseId: string): Promise<void>;
   onReview(callback: (sessionId: string) => void): () => void;

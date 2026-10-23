@@ -2,14 +2,18 @@
 // code paths (ai.ts, the learner's note search). For each it reports load time (a local model being loaded
 // into memory), time to the first word, and total time.
 //
-//   node scripts/bench-ai.ts <copy-of-gloss.db> [--session <id>] [--out <file.json>] [--label <name>]
+//   node scripts/bench-ai.ts <copy-of-gloss.db> [--cloud] [--session <id>] [--out <file.json>] [--label <name>]
+//
+// --cloud uses fast mode (Gemini, with the key saved in Settings → Keychain; the key is never printed).
 //
 // Always run it on a COPY of the database (it saves concepts like the app does). Don't run it while Gloss
 // is recording a session: it would compete with the app for the model.
 import { readFileSync, writeFileSync } from "node:fs";
-import { askAboutImage, DEFAULT_AI, summarizeSession, urgently } from "../src/core/ai.ts";
+import { askAboutImage, DEFAULT_AI, setCloud, summarizeSession, urgently } from "../src/core/ai.ts";
 import { StudyDb } from "../src/core/db.ts";
-import { KEEP_ALIVE, OllamaProvider, provider, setProvider, type ChatRequest, type ModelProvider } from "../src/core/provider.ts";
+import { readApiKey } from "../src/core/keychain.ts";
+import { GeminiProvider, KEEP_ALIVE, OllamaProvider, provider, setProvider, type ChatRequest, type ModelProvider } from "../src/core/provider.ts";
+import { loadSettings } from "../src/core/settings.ts";
 import { LearnerService } from "../src/main/learner.ts";
 
 const args = process.argv.slice(2);
@@ -85,8 +89,11 @@ class Timed implements ModelProvider {
   models() {
     return this.inner.models();
   }
-  unloadOthers(keep: string) {
+  unloadOthers(keep: string[]) {
     return this.inner.unloadOthers(keep);
+  }
+  async load(model: string) {
+    await load(model);
   }
 }
 
@@ -94,6 +101,12 @@ const db = new StudyDb(dbPath);
 const courses = JSON.parse(readFileSync(new URL("../courses.json", import.meta.url), "utf8")) as { id: string; name: string }[];
 const learner = new LearnerService(db, () => courses);
 setProvider(new Timed(provider()));
+const useCloud = args.includes("--cloud");
+if (useCloud) {
+  const key = await readApiKey();
+  if (!key) throw new Error("No Gemini key in the Keychain: save one in Gloss → Settings → Fast mode first.");
+  setCloud({ provider: new Timed(new GeminiProvider(key)), model: loadSettings(new URL("../settings.json", import.meta.url).pathname).cloud.model });
+}
 
 // A typical session: the one with the most text among those with 10–20 passages, unless one is given.
 const sessions = db.listSessions().filter((s) => s.endedAt);
@@ -105,7 +118,7 @@ if (!session) throw new Error("No suitable session in this database");
 const courseName = courses.find((c) => c.id === session.courseId)?.name ?? session.courseId;
 const passages = db.getPassages(session.id);
 const image = readFileSync(new URL("./bench-crop.jpg", import.meta.url)).toString("base64");
-const cfg = { ...DEFAULT_AI };
+const cfg = { ...DEFAULT_AI, cloud: useCloud };
 
 type Result = {
   task: string;

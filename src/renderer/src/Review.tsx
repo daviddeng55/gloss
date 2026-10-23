@@ -4,6 +4,7 @@ import type { AnswerResult, BuddyChatView, QuizItemView, ReviewData } from "../.
 import { BuddyFigure } from "./Buddy.tsx";
 import { plainMathToLatex } from "../../shared/mathText.ts";
 import { dateFmt, duration, timeFmt } from "./format.ts";
+import CloudTag from "./CloudTag.tsx";
 import Rich from "./Rich.tsx";
 
 export default function Review({ sessionId, section }: { sessionId: string; section?: "summary" | "quiz" }) {
@@ -39,7 +40,9 @@ export default function Review({ sessionId, section }: { sessionId: string; sect
           </header>
 
           <section id="review-summary" className="mb-12 scroll-mt-4">
-            <h2 className="mb-4 font-serif text-[21px] font-semibold">What you covered</h2>
+            <h2 className="mb-4 flex items-center gap-3 font-serif text-[21px] font-semibold">
+              What you covered {data.summary.status === "done" && data.summary.data?.cloud ? <CloudTag /> : null}
+            </h2>
             <SummaryView data={data} onRetry={() => void window.api.retryReview(sessionId)} />
           </section>
 
@@ -77,7 +80,9 @@ export default function Review({ sessionId, section }: { sessionId: string; sect
           ) : null}
 
           <section id="review-quiz" className="min-h-[calc(100vh-7rem)] scroll-mt-4">
-            <h2 className="mb-4 font-serif text-[21px] font-semibold">Quiz</h2>
+            <h2 className="mb-4 flex items-center gap-3 font-serif text-[21px] font-semibold">
+              Quiz {data.quiz.status === "done" && data.quiz.cloud && data.quiz.items.length ? <CloudTag /> : null}
+            </h2>
             <QuizView data={data} onRetry={() => void window.api.retryReview(sessionId)} reload={load} />
           </section>
         </article>
@@ -96,6 +101,7 @@ function BuddyChat({ chat }: { chat: BuddyChatView }) {
         <p className="eyebrow">
           {chat.buddyName} · {chat.topic} · {timeFmt.format(new Date(chat.startedAt))}
         </p>
+        {chat.turns.some((t) => t.cloud) ? <CloudTag className="ml-auto" /> : null}
       </div>
       <ul className="space-y-2">
         {chat.turns.map((t, i) => (
@@ -158,7 +164,24 @@ function SummaryView({ data, onRetry }: { data: ReviewData; onRetry: () => void 
   const { status, data: summary, error } = data.summary;
   if (status === "error") return <Problem message={error ?? "Couldn't make a summary."} onRetry={onRetry} />;
   if (data.finishing) return <Working>Finishing reading your notes (re-reading the math)… this can take a couple of minutes.</Working>;
-  if (status !== "done" || !summary) return <Working>Summarizing your session… this takes about a minute.</Working>;
+  if (status !== "done" || !summary) {
+    // Points appear one by one as they're written.
+    const partial = data.summary.partial ?? [];
+    if (!partial.length) return <Working>Summarizing your session…</Working>;
+    return (
+      <div className="space-y-6">
+        <ul className="space-y-6">
+          {partial.map((text, i) => (
+            <li key={i} className="appear flex gap-4">
+              <span className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-accent" aria-hidden />
+              <Rich text={plainMathToLatex(text)} className="min-w-0 flex-1 font-serif text-[18px]" />
+            </li>
+          ))}
+        </ul>
+        <Working>Writing the rest…</Working>
+      </div>
+    );
+  }
   if (!summary.ok) return <Problem message={summary.reason} />;
   return (
     <ul className="appear space-y-6">
@@ -201,7 +224,11 @@ function QuizView({ data, onRetry, reload }: { data: ReviewData; onRetry: () => 
   if (status !== "done") {
     return (
       <Working>
-        {data.summary.status === "done" ? "Writing and checking your quiz… about 2 minutes." : "Your quiz comes after the summary."}
+        {data.summary.status !== "done"
+          ? "Your quiz comes after the summary."
+          : data.quiz.step === "checking"
+            ? "Checking each question against your notes…"
+            : "Writing your quiz…"}
       </Working>
     );
   }
@@ -342,7 +369,10 @@ export function Question(props: {
 
       {result ? (
         <div className={`appear mt-6 rounded-xl border px-4 py-3 ${result.correct ? "border-good/30 bg-good/10" : "border-bad/30 bg-bad/10"}`}>
-          <p className={`font-semibold ${result.correct ? "text-good" : "text-bad"}`}>{result.correct ? "Correct" : "Not quite"}</p>
+          <p className={`flex items-center gap-2 font-semibold ${result.correct ? "text-good" : "text-bad"}`}>
+            {result.correct ? "Correct" : "Not quite"}
+            {result.cloud ? <CloudTag className="ml-auto" /> : null}
+          </p>
           {!result.correct ? (
             <div className="mt-2 flex items-baseline gap-2">
               <span className="shrink-0 text-muted">Answer:</span>

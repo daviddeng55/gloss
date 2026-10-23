@@ -157,6 +157,7 @@ test("upgrading an older database backs it up first and indexes the existing pas
     const raw = new DatabaseSync(path);
     raw.exec(`DROP TABLE buddy_chats; DROP TABLE notes_fts; DROP TABLE note_sections; DROP TABLE topics;
               ALTER TABLE sessions DROP COLUMN notes_status; ALTER TABLE sessions DROP COLUMN notes_error;
+              ALTER TABLE sessions DROP COLUMN quiz_cloud;
               DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update;
               DROP TABLE chunks_fts; ALTER TABLE chunks DROP COLUMN fts_rowid; PRAGMA user_version = 4;`);
     raw.close();

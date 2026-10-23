@@ -1,12 +1,19 @@
 // End-of-session review: generates the summary and quiz in the background (one session at a time,
 // so the laptop only runs one AI job at once), saves them, and marks answers.
-import { AiError, checkAi, checkAnswer, DEFAULT_AI, makeQuiz, summarizeSession, verifyQuestions, type AiConfig, type QuizDraft } from "../core/ai.ts";
+import { AiError, checkAi, checkAnswer, DEFAULT_AI, makeQuiz, summarizeSession, tracked, verifyQuestions, type AiConfig, type QuizDraft } from "../core/ai.ts";
 import type { StudyDb } from "../core/db.ts";
 import { reviewIntervalDays } from "../core/learner.ts";
 import type { AnswerResult, Course, ReviewData, TaskStatus } from "../shared/types.ts";
 import type { LearnerService } from "./learner.ts";
 
-type Progress = { summary: TaskStatus; summaryError?: string; quiz: TaskStatus; quizError?: string };
+type Progress = {
+  summary: TaskStatus;
+  summaryError?: string;
+  partial?: string[]; // summary points written so far
+  quiz: TaskStatus;
+  quizError?: string;
+  quizStep?: "writing" | "checking";
+};
 
 const errorText = (err: unknown) =>
   err instanceof AiError ? err.message : `Something went wrong: ${(err as Error).message}`;
@@ -21,6 +28,7 @@ export class ReviewService {
   private learner: LearnerService;
 
   private reviewModel: () => string;
+  private cloudOk: (apps: string[]) => boolean;
 
   constructor(
     db: StudyDb,
@@ -28,17 +36,23 @@ export class ReviewService {
     learner: LearnerService,
     changed: (sessionId: string) => void,
     reviewModel: () => string = () => DEFAULT_AI.model,
+    /** Fast mode is on and text from all these apps may go to the cloud. */
+    cloudOk: (apps: string[]) => boolean = () => false,
   ) {
     this.reviewModel = reviewModel;
+    this.cloudOk = cloudOk;
     this.learner = learner;
     this.db = db;
     this.courses = courses;
     this.changed = changed;
   }
 
-  /** The model chosen in Settings for summaries, quizzes and marking. */
-  private model(): AiConfig {
-    return { ...DEFAULT_AI, model: this.reviewModel() };
+  /**
+   * The model chosen in Settings for summaries, quizzes and marking; in fast mode, the cloud model may
+   * answer if all of `passages` came from study apps.
+   */
+  private model(passages: { sourceApp?: string }[]): AiConfig {
+    return { ...DEFAULT_AI, model: this.reviewModel(), cloud: this.cloudOk(passages.map((p) => p.sourceApp ?? "")) };
   }
 
   private courseName(courseId: string) {
@@ -102,7 +116,9 @@ export class ReviewService {
     await this.saving.get(sessionId)?.catch(() => {});
     const session = this.db.getSession(sessionId);
     if (!session) return;
-    const ai = await checkAi(this.model());
+    const passages = this.db.getPassages(sessionId);
+    const cfg = this.model(passages);
+    const ai = await checkAi(cfg);
     if (!ai.ok) {
       const p = this.status(sessionId);
       this.set(sessionId, {
@@ -111,15 +127,19 @@ export class ReviewService {
       });
       return;
     }
-    const passages = this.db.getPassages(sessionId);
     const course = this.courseName(session.courseId);
 
     if (this.status(sessionId).summary === "waiting") {
       this.set(sessionId, { summary: "working" });
       try {
-        // Reuse concept names from earlier sessions so the learner model adds up over time.
-        const summary = await summarizeSession(passages, course, session.goal, this.model(), this.learner.knownConceptNames(session.courseId));
-        this.db.saveSummary(sessionId, summary);
+        // Reuse concept names from earlier sessions so the learner model adds up over time. Points are
+        // shown one by one as they're written.
+        const { value: summary, cloud } = await tracked(() =>
+          summarizeSession(passages, course, session.goal, cfg, this.learner.knownConceptNames(session.courseId), (points) => {
+            if (points.length !== (this.progress.get(sessionId)?.partial?.length ?? 0)) this.set(sessionId, { partial: points });
+          }),
+        );
+        this.db.saveSummary(sessionId, cloud ? { ...summary, cloud } : summary);
         this.learner.recordSessionConcepts(sessionId, session.courseId, summary);
         this.set(sessionId, { summary: "done" });
       } catch (err) {
@@ -138,22 +158,26 @@ export class ReviewService {
         // survive, try once more and keep the good ones from both rounds.
         const kept: QuizDraft[] = [];
         let reason = "";
-        for (let attempt = 0; attempt < 2 && kept.length < 5; attempt++) {
-          const quiz = await makeQuiz(passages, course, this.model(), { askedQuestions, concepts });
-          if (!quiz.ok) {
-            reason = quiz.reason;
-            break;
+        const { cloud } = await tracked(async () => {
+          for (let attempt = 0; attempt < 2 && kept.length < 5; attempt++) {
+            this.set(sessionId, { quizStep: "writing" });
+            const quiz = await makeQuiz(passages, course, cfg, { askedQuestions, concepts });
+            if (!quiz.ok) {
+              reason = quiz.reason;
+              break;
+            }
+            const fresh = quiz.questions.filter((q) => !kept.some((k) => k.question === q.question));
+            this.set(sessionId, { quizStep: "checking" });
+            const checked = await verifyQuestions(fresh, passages, cfg);
+            kept.push(...checked.kept);
+            console.log(`[review] quiz round ${attempt + 1}: ${fresh.length} written, ${checked.dropped.length} dropped by checking`);
           }
-          const fresh = quiz.questions.filter((q) => !kept.some((k) => k.question === q.question));
-          const checked = await verifyQuestions(fresh, passages, this.model());
-          kept.push(...checked.kept);
-          console.log(`[review] quiz round ${attempt + 1}: ${fresh.length} written, ${checked.dropped.length} dropped by checking`);
-        }
+        });
         this.learner.tagQuestions(sessionId, kept);
         if (kept.length < 3) {
           this.db.saveQuizNote(sessionId, reason || "The AI couldn't write enough questions that it could check against your notes.");
         } else {
-          this.db.saveQuiz(sessionId, session.courseId, kept.slice(0, 8));
+          this.db.saveQuiz(sessionId, session.courseId, kept.slice(0, 8), cloud);
         }
         this.set(sessionId, { quiz: "done" });
       } catch (err) {
@@ -173,12 +197,19 @@ export class ReviewService {
       goal: s.goal,
       startedAt: s.startedAt,
       activeMs: s.activeMs,
-      summary: { status: p.summary, data: this.db.getSummary(sessionId) ?? undefined, error: p.summaryError },
+      summary: {
+        status: p.summary,
+        data: this.db.getSummary(sessionId) ?? undefined,
+        error: p.summaryError,
+        partial: p.summary === "working" ? p.partial : undefined,
+      },
       quiz: {
         status: p.quiz,
         items: this.db.getQuiz(sessionId),
         note: this.db.getQuizNote(sessionId) ?? undefined,
         error: p.quizError,
+        cloud: this.db.quizCloud(sessionId),
+        step: p.quiz === "working" ? p.quizStep : undefined,
       },
       connections: this.learner.connections(sessionId, s.courseId),
       buddy: this.db.buddyChats(sessionId),
@@ -196,9 +227,9 @@ export class ReviewService {
     if (item.type === "multiple_choice") {
       result = { correct: response === item.answer, answer: item.answer, explanation: "" };
     } else {
-      const passage = item.chunkId ? this.db.getChunkText(item.chunkId) : "";
-      const m = await checkAnswer(item, passage, response, this.model());
-      result = { correct: m.correct, answer: item.answer, explanation: m.explanation };
+      const chunk = item.chunkId ? this.db.getChunk(item.chunkId) : null;
+      const { value: m, cloud } = await tracked(() => checkAnswer(item, chunk?.text ?? "", response, this.model(chunk ? [chunk] : [])));
+      result = { correct: m.correct, answer: item.answer, explanation: m.explanation, ...(cloud && m.explanation ? { cloud } : {}) };
     }
     // The answer is evidence for the learner model, and sets when the question comes back.
     const meta = this.db.quizItemConcept(itemId);

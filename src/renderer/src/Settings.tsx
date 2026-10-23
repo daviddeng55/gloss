@@ -1,7 +1,8 @@
-// Settings: courses, the ask shortcut and voice, capture timing, learning, never-record list, AI models,
-// and the rules for using Gloss. Saved to settings.json / courses.json / never-record.json.
+// Settings: courses, the ask shortcut and voice, capture timing, learning, never-record list, fast mode,
+// AI models, and the rules for using Gloss. Saved to settings.json / courses.json / never-record.json; the
+// Gemini key goes straight to the macOS Keychain and never comes back to this window.
 import { useEffect, useState, type ReactNode } from "react";
-import type { SettingsView } from "../../shared/types.ts";
+import type { CloudView, SettingsView } from "../../shared/types.ts";
 import { BuddyChooser } from "./Buddy.tsx";
 
 function Section({ title, children, note }: { title: string; children: ReactNode; note?: string }) {
@@ -75,6 +76,72 @@ function ListEditor({ items, onChange, placeholder }: { items: string[]; onChang
       placeholder={placeholder}
       className="field selectable w-full font-mono text-[12px] leading-relaxed"
     />
+  );
+}
+
+/** Paste, check and save the Gemini key; or test / remove the saved one. Saved at once (not with Save). */
+function CloudKey({ view, onChange }: { view: CloudView; onChange: () => void }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const run = async (work: () => Promise<{ ok: boolean; message: string } | void>) => {
+    setBusy(true);
+    setResult(null);
+    const r = await work();
+    setBusy(false);
+    if (r) setResult(r);
+    onChange();
+  };
+  return (
+    <div className="space-y-2">
+      {view.hasKey ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="flex items-center gap-2 font-medium">
+            <span className={`size-2 rounded-full ${view.active ? "bg-good" : "bg-ink/25"}`} />
+            {view.active ? "Key saved in your Keychain" : "Key saved; fast mode is off"}
+          </p>
+          <span className="flex gap-2">
+            <button disabled={busy} onClick={() => void run(() => window.api.testCloud())} className="btn-secondary">
+              {busy ? "Testing…" : "Test"}
+            </button>
+            <button disabled={busy} onClick={() => void run(() => window.api.removeCloudKey())} className="btn-danger">
+              Remove key
+            </button>
+          </span>
+        </div>
+      ) : (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void run(async () => {
+              const r = await window.api.saveCloudKey(key);
+              if (r.ok) setKey("");
+              return r;
+            });
+          }}
+        >
+          <input
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Paste your Gemini API key"
+            className={`${input} flex-1 font-mono`}
+          />
+          <button type="submit" disabled={busy || !key.trim()} className="btn-primary">
+            {busy ? "Checking…" : "Save key"}
+          </button>
+        </form>
+      )}
+      {result ? <p className={`text-[13px] ${result.ok ? "text-good" : "text-bad"}`}>{result.message}</p> : null}
+      {!result && view.active && view.problem ? (
+        <p className="text-[13px] text-bad">
+          Last cloud call failed: {view.problem} Using the model on your Mac{view.pausedForSeconds ? ` for the next ${view.pausedForSeconds} s` : " for that one"}.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -203,7 +270,29 @@ export default function Settings() {
             <ListEditor items={s.neverRecord.titles} onChange={(v) => update((d) => void (d.neverRecord.titles = v))} placeholder="online banking" />
           </Section>
 
-          <Section title="AI models" note="Everything runs on your Mac through Ollama. Nothing is sent online.">
+          <Section
+            title="Fast mode"
+            note="With your own Gemini API key, Google's Gemini writes summaries, quizzes, notes, answers and Study Buddy's questions in seconds. Only text read in the study apps below is sent, after the same redaction as everything Gloss saves. If there's no key, no internet, or the rate limit is hit, your Mac's model answers instead, as before."
+          >
+            {s.cloud ? <CloudKey view={s.cloud} onChange={() => void window.api.cloudView().then((cloud) => setS((cur) => (cur ? { ...cur, cloud } : cur)))} /> : null}
+            <p className="text-[12px] leading-snug text-muted">
+              Get a key at aistudio.google.com → API keys. On Google's free tier, what's sent may be used to improve Google's products (not on a paid key); you must be 18 or older,
+              and in the EU, UK and Switzerland only paid keys are allowed. Answers from Gemini carry a “sent to cloud” label.
+            </p>
+            <Row label="Use fast mode" hint="Off: everything stays on your Mac, even with a key saved.">
+              <Toggle on={s.settings.cloud.enabled} onChange={(b) => update((d) => void (d.settings.cloud.enabled = b))} />
+            </Row>
+            <Row label="Gemini model" hint="gemini-3.5-flash-lite is the fastest Flash model.">
+              <input value={s.settings.cloud.model} onChange={(e) => update((d) => void (d.settings.cloud.model = e.target.value.trim()))} className={`${input} w-56 font-mono text-[12px]`} />
+            </Row>
+            <p className="font-medium">Study apps</p>
+            <p className="-mt-3 text-[12px] leading-snug text-muted">
+              Only what was read in these apps can be sent (one app name per line, as in the menu bar). A question about any other window, or a picture with a password or card number in it, stays on your Mac.
+            </p>
+            <ListEditor items={s.settings.cloud.studyApps} onChange={(v) => update((d) => void (d.settings.cloud.studyApps = v))} placeholder="Google Chrome" />
+          </Section>
+
+          <Section title="AI models" note="These run on your Mac through Ollama, and nothing they read is sent online. In fast mode they answer whatever can't go to Gemini.">
             {s.aiProblem ? (
               <p className="rounded-xl border border-bad/25 bg-bad/10 px-4 py-3">⚠︎ {s.aiProblem}</p>
             ) : (
@@ -227,7 +316,7 @@ export default function Settings() {
                 </li>
               </ul>
             ) : null}
-            <p className="text-[13px] text-muted">Only one model is loaded at a time; each unloads after 3 minutes unused.</p>
+            <p className="text-[13px] text-muted">One model is loaded at a time (plus the small memory model); each unloads after 3 minutes unused.</p>
           </Section>
         </div>
       </div>

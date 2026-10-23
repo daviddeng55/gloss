@@ -1,4 +1,5 @@
-// All AI calls go through this module. Default: a local model through Ollama (http://localhost:11434).
+// All AI calls go through this module. Default: a local model through Ollama (http://localhost:11434);
+// in fast mode, calls whose content may leave the Mac go to Gemini first and fall back to Ollama.
 //   summarizeSession()  — what a session covered, in order, with sources
 //   makeQuiz()          — 5–8 questions from a session's text, each tied to a passage
 //   checkAnswer()       — marks a short answer against its source passage
@@ -8,12 +9,15 @@
 // The calls themselves go through the active ModelProvider (provider.ts), so where the models run can change.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { AiError, KEEP_ALIVE, provider, type ChatMessage } from "./provider.ts";
+import { AiError, KEEP_ALIVE, provider, type ChatMessage, type ChatRequest, type ModelProvider } from "./provider.ts";
 
 export { AiError, KEEP_ALIVE };
 
-/** Which model a call uses (the provider decides where it runs). */
-export type AiConfig = { model: string };
+/**
+ * Which local model a call uses. `cloud: true` means its content may be sent to the cloud model (the
+ * caller checked it all comes from study apps); without it, a call never leaves the Mac.
+ */
+export type AiConfig = { model: string; cloud?: boolean };
 export const DEFAULT_AI: AiConfig = { model: "qwen3.5:4b" };
 
 /** Rules included in every prompt (PRD section 9). */
@@ -26,6 +30,58 @@ export const TUTOR_RULES = `You are a study partner for a university student. Ru
 - The material was read from the screen by text recognition and may contain misread symbols. If it is unclear or doesn't contain the answer, say so. Never make things up.`;
 
 type Message = ChatMessage;
+
+// ---------- fast mode: the cloud model, with the local one as fallback ----------
+
+export type Cloud = { provider: ModelProvider; model: string };
+let cloud: Cloud | null = null;
+let cloudPausedUntil = 0;
+let cloudProblem = "";
+
+/** Turns fast mode on (a Gemini provider with the student's key) or off (null). */
+export function setCloud(c: Cloud | null) {
+  cloud = c;
+  cloudPausedUntil = 0;
+  cloudProblem = "";
+}
+
+/** Fast mode is set up, and what last went wrong with it (shown in Settings). */
+export function cloudStatus(): { on: boolean; model?: string; problem: string; pausedForMs: number } {
+  return { on: !!cloud, model: cloud?.model, problem: cloudProblem, pausedForMs: Math.max(0, cloudPausedUntil - Date.now()) };
+}
+
+/** The cloud model to try for this call, or null to stay on the Mac. */
+function cloudFor(cfg: AiConfig): Cloud | null {
+  return cfg.cloud && cloud && Date.now() >= cloudPausedUntil ? cloud : null;
+}
+
+/** After a failed cloud call: how long to leave the cloud alone before trying it again. */
+function cloudFailed(err: unknown) {
+  const e = err instanceof AiError ? err : new AiError("failed", (err as Error).message);
+  cloudProblem = e.message;
+  const pause =
+    e.code === "rate-limited" ? Math.min(e.retryAfterMs ?? 60_000, 10 * 60_000)
+    : e.code === "bad-key" || e.code === "model-missing" ? 10 * 60_000 // until Settings change it
+    : e.code === "offline" ? 30_000
+    : 0;
+  cloudPausedUntil = Date.now() + pause;
+  console.log(`[ai] cloud call failed, using the local model: ${e.message}`);
+}
+
+type Where = { cloud: boolean };
+const whereStore = new AsyncLocalStorage<Where>();
+
+/** Runs `work` and says whether any of its AI calls were answered by the cloud model (for the label). */
+export async function tracked<T>(work: () => Promise<T>): Promise<{ value: T; cloud: boolean }> {
+  const where: Where = { cloud: false };
+  const value = await whereStore.run(where, work);
+  return { value, cloud: where.cloud };
+}
+
+function answeredByCloud() {
+  const where = whereStore.getStore();
+  if (where) where.cloud = true;
+}
 
 // ---------- one model at a time ----------
 
@@ -64,8 +120,10 @@ async function runWaiting() {
   running = true;
   while (waiting.length) {
     const job = waiting.shift()!;
-    if (currentModel !== job.cfg.model) {
-      await provider().unloadOthers(job.cfg.model).catch(() => {});
+    // The embedding model is small (~0.6 GB), so it stays loaded next to the others: asking a question
+    // embeds it first, and swapping models for that cost ~3 s of reloading on every question.
+    if (currentModel !== job.cfg.model && job.cfg.model !== EMBEDDER.model) {
+      await provider().unloadOthers([job.cfg.model, EMBEDDER.model]).catch(() => {});
       currentModel = job.cfg.model;
     }
     await job.run();
@@ -73,25 +131,95 @@ async function runWaiting() {
   running = false;
 }
 
-/** One chat call. With `schema`, the model must reply with JSON matching it, which we parse. */
-export function chat<T = string>(
-  cfg: AiConfig,
-  req: { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number },
-): Promise<T> {
-  return withModel(cfg, () => chatNow<T>(cfg, req));
+/**
+ * Loads the local model ahead of a question (while you're still circling), unless other AI work is
+ * already running or waiting: then loading it now would only be undone before the question comes.
+ */
+export function warmUp(cfg: AiConfig): void {
+  const p = provider();
+  if (running || waiting.length || !p.load) return;
+  void withModel(cfg, () => p.load!(cfg.model)).catch(() => {});
 }
 
-async function chatNow<T>(
-  cfg: AiConfig,
-  req: { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number },
-): Promise<T> {
-  const content = await provider().chat({ model: cfg.model, ...req });
-  if (!req.schema) return content as T;
+type ChatOptions = { messages: Message[]; schema?: object; think?: boolean; temperature?: number; numCtx?: number; timeoutMs?: number };
+
+/**
+ * One chat call. With `schema`, the model must reply with JSON matching it, which we parse. In fast mode
+ * (and if `cfg.cloud`), the cloud model answers; if that fails for any reason, the local model does.
+ * `onText`, if given, gets the reply so far as it's written (to show progress).
+ */
+export async function chat<T = string>(cfg: AiConfig, req: ChatOptions, onText?: (soFar: string) => void): Promise<T> {
+  if (onText) {
+    let soFar = "";
+    let fromCloud = false;
+    const content = await streamReply(
+      cfg,
+      req,
+      (piece) => void onText((soFar += piece)),
+      (cloud) => {
+        fromCloud = cloud;
+        soFar = "";
+      },
+    );
+    try {
+      return parseReply<T>(content, req.schema);
+    } catch (err) {
+      if (!fromCloud) throw err;
+      cloudFailed(err);
+      return chat<T>({ ...cfg, cloud: false }, req, onText);
+    }
+  }
+  const c = cloudFor(cfg);
+  if (c) {
+    try {
+      const value = parseReply<T>(await c.provider.chat({ ...req, model: c.model }), req.schema);
+      answeredByCloud();
+      return value;
+    } catch (err) {
+      cloudFailed(err);
+    }
+  }
+  return withModel(cfg, async () => parseReply<T>(await provider().chat({ model: cfg.model, ...req }), req.schema));
+}
+
+function parseReply<T>(content: string, schema?: object): T {
+  if (!schema) return content as T;
   try {
-    return JSON.parse(fixLatexEscapes(content)) as T;
+    return JSON.parse(fixLatexEscapes(content.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, ""))) as T;
   } catch {
     throw new AiError("bad-output", "The AI model gave an answer in the wrong format.");
   }
+}
+
+/**
+ * A reply streamed piece by piece. `onStart` is called before the first piece from each model that
+ * answers (`cloud` says which): if the cloud model fails halfway, it's called again for the local model,
+ * and whatever was shown should be cleared.
+ */
+export async function streamReply(
+  cfg: AiConfig,
+  req: Omit<ChatRequest, "model">,
+  onText: (piece: string) => boolean | void,
+  onStart: (cloud: boolean) => void = () => {},
+): Promise<string> {
+  const c = cloudFor(cfg);
+  if (c) {
+    let started = false;
+    try {
+      const text = await c.provider.stream({ ...req, model: c.model }, (piece) => {
+        if (!started) onStart((started = true));
+        return onText(piece);
+      });
+      answeredByCloud();
+      return text;
+    } catch (err) {
+      cloudFailed(err);
+    }
+  }
+  return withModel(cfg, () => {
+    onStart(false);
+    return provider().stream({ ...req, model: cfg.model }, onText);
+  });
 }
 
 /**
@@ -103,8 +231,9 @@ export function fixLatexEscapes(json: string): string {
   return json.replace(/(?<!\\)\\(?=(?:[bfrt][a-zA-Z]|n(?:eq|e\b|ot|u\b|abla|leq|geq|mid|subseteq|exists|i\b|ewline)))/g, "\\\\");
 }
 
-/** Is the AI available (Ollama running), and is the model downloaded? */
+/** Is the AI available (fast mode, or Ollama running with the model downloaded)? */
 export async function checkAi(cfg: AiConfig = DEFAULT_AI): Promise<{ ok: true } | { ok: false; error: AiError }> {
+  if (cloudFor(cfg)) return { ok: true };
   const models = await provider().models();
   if (!models) return { ok: false, error: new AiError("not-running", "Ollama isn't running. Open the Ollama app, then try again.") };
   if (!hasModel(models, cfg.model)) {
@@ -120,7 +249,8 @@ function hasModel(models: string[], model: string): boolean {
 
 // ---------- session material ----------
 
-export type Passage = { id: string; text: string; sourceTitle: string };
+/** `sourceApp`: the app it was read in (fast mode only sends text from study apps). */
+export type Passage = { id: string; text: string; sourceTitle: string; sourceApp?: string };
 
 /** Numbered passages for a prompt, trimmed to fit: evenly sample if the session is very long. */
 export function numbered(passages: Passage[], maxChars: number): { text: string; used: Passage[] } {
@@ -169,12 +299,30 @@ const SUMMARY_SCHEMA = {
   required: ["enough", "reason", "points"],
 };
 
+/**
+ * The "text" of each point that's complete so far in a summary still being written (JSON), so the points
+ * can be shown one by one. Exported for tests.
+ */
+export function partialPoints(json: string): string[] {
+  const out: string[] = [];
+  for (const m of json.matchAll(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
+    try {
+      const text = (JSON.parse(`"${m[1]}"`) as string).trim();
+      if (text) out.push(text);
+    } catch {
+      /* half an escape: wait for more */
+    }
+  }
+  return out;
+}
+
 export async function summarizeSession(
   passages: Passage[],
   course: string,
   goal: string | undefined,
   cfg: AiConfig = DEFAULT_AI,
   knownConcepts: string[] = [],
+  onPoints?: (points: string[]) => void,
 ): Promise<Summary> {
   const thin = tooThin(passages);
   if (thin) return { ok: false, reason: thin };
@@ -195,7 +343,7 @@ If the passages are too garbled or unrelated to the course to summarize honestly
 ${text}`,
       },
     ],
-  });
+  }, onPoints && ((soFar) => onPoints(partialPoints(soFar))));
   if (!out.enough || !out.points?.length) {
     return { ok: false, reason: out.reason || "The captured text wasn't clear enough to summarize." };
   }
@@ -690,17 +838,17 @@ export function askAboutImage(
   },
   onText: (text: string) => void,
   cfg: AiConfig = DEFAULT_AI,
+  onStart?: (cloud: boolean) => void,
 ): Promise<string> {
-  return withModel(cfg, async () => {
-    const material = req.passages.length
-      ? req.passages.map((p, i) => `[${i + 1}] (${p.when ? `${p.when}, ` : ""}from: ${p.sourceTitle || "unknown window"})\n${p.text}`).join("\n\n")
-      : "(Nothing from this session's notes matches this question.)";
-    const messages: Message[] = [
-      { role: "system", content: TUTOR_RULES },
-      {
-        role: "user",
-        images: [req.imageBase64],
-        content: `Course: ${req.course}. The image shows the part of the screen the student circled.
+  const material = req.passages.length
+    ? req.passages.map((p, i) => `[${i + 1}] (${p.when ? `${p.when}, ` : ""}from: ${p.sourceTitle || "unknown window"})\n${p.text}`).join("\n\n")
+    : "(Nothing from this session's notes matches this question.)";
+  const messages: Message[] = [
+    { role: "system", content: TUTOR_RULES },
+    {
+      role: "user",
+      images: [req.imageBase64],
+      content: `Course: ${req.course}. The image shows the part of the screen the student circled.
 
 Course material (from this session and earlier ones):
 ${material}
@@ -710,10 +858,9 @@ ${req.earlier.length ? `Earlier in this conversation:\n${req.earlier.map((e) => 
 
 ${HINT_LEVELS[req.level].instruction}
 If the image looks like a graded assignment or quiz question, never give its final answer. If the course material doesn't cover what's needed, say "This may not have been covered in your course yet." If the image is unclear, say so. Use Markdown; write math in LaTeX between $...$.`,
-      },
-    ];
-    return provider().stream({ model: cfg.model, messages, temperature: 0.3 }, (piece) => void onText(piece));
-  });
+    },
+  ];
+  return streamReply(cfg, { messages, temperature: 0.3 }, (piece) => void onText(piece), onStart);
 }
 
 // ---------- embeddings (course memory) ----------

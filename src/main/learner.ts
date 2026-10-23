@@ -12,6 +12,7 @@ export class LearnerService {
   private db: StudyDb;
   private courses: () => Course[];
   private hasEmbeddings: boolean | null = null; // checked lazily
+  private lastQuery: { text: string; embedding: Promise<number[] | undefined> } | null = null;
 
   constructor(db: StudyDb, courses: () => Course[]) {
     this.db = db;
@@ -21,6 +22,14 @@ export class LearnerService {
   private async embeddingsOn(): Promise<boolean> {
     if (this.hasEmbeddings === null) this.hasEmbeddings = await embeddingsAvailable();
     return this.hasEmbeddings;
+  }
+
+  /** A question's embedding; asking needs it twice (concept, then notes), so the last one is kept. */
+  private queryEmbedding(question: string): Promise<number[] | undefined> {
+    if (this.lastQuery?.text !== question) {
+      this.lastQuery = { text: question, embedding: embed([question], "query").then((e) => e[0], () => undefined) };
+    }
+    return this.lastQuery.embedding;
   }
 
   /** Re-check (e.g. after the embedding model is downloaded). */
@@ -98,7 +107,7 @@ export class LearnerService {
     const concepts = this.db.conceptEmbeddings(courseId);
     if (!concepts.length) return null;
     let qEmb: number[] | undefined;
-    if (await this.embeddingsOn()) qEmb = (await embed([question], "query").catch(() => [undefined]))[0];
+    if (await this.embeddingsOn()) qEmb = await this.queryEmbedding(question);
     // Notes that match the question vote for the concepts they're linked to.
     const top = searchPassages(question, this.db.coursePassages(courseId), { queryEmbedding: qEmb, limit: 2 });
     const boost = new Map(this.db.conceptsForChunks(top.map((p) => p.id)).map((id) => [id, 0.08]));
@@ -145,7 +154,7 @@ export class LearnerService {
   async passagesFor(courseId: string, sessionId: string, question: string): Promise<(MemoryPassage & { when: string })[]> {
     const all = this.db.coursePassages(courseId);
     let qEmb: number[] | undefined;
-    if ((await this.embeddingsOn()) && all.some((p) => p.embedding)) qEmb = (await embed([question], "query").catch(() => [undefined]))[0];
+    if ((await this.embeddingsOn()) && all.some((p) => p.embedding)) qEmb = await this.queryEmbedding(question);
     const today = searchPassages(question, all.filter((p) => p.sessionId === sessionId), { queryEmbedding: qEmb, limit: 3 });
     const earlier = searchPassages(question, all.filter((p) => p.sessionId !== sessionId), { queryEmbedding: qEmb, limit: 2 });
     let chars = 0;

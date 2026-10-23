@@ -3,7 +3,7 @@
 // Your answer (typed or spoken) is judged by the AI, which only picks the buddy's reaction and updates
 // the learner model; the chat is saved to the session's review.
 import { BrowserWindow, powerMonitor, screen } from "electron";
-import { urgently, type AiConfig } from "../core/ai.ts";
+import { tracked, urgently, type AiConfig } from "../core/ai.ts";
 import {
   BUDDY_CHARACTERS,
   BuddyTrigger,
@@ -49,11 +49,13 @@ export class BuddyService {
     preload: string;
     load: (win: BrowserWindow, route: string) => void;
     settings: () => Settings;
-    model: () => AiConfig;
+    /** The model for these apps' text (fast mode: the cloud model may answer if they're study apps). */
+    model: (apps: string[]) => AiConfig;
   };
   private session: BuddySession | null = null;
   private trigger = new BuddyTrigger();
   private textByTitle = new Map<string, string>(); // latest text read from each window
+  private appByTitle = new Map<string, string>(); // and the app it was in
   private concepts: { id: string; name: string }[] = [];
   private conceptsAt = 0;
   private win: BrowserWindow | null = null;
@@ -73,6 +75,7 @@ export class BuddyService {
     this.session = s;
     this.trigger = new BuddyTrigger({ cooldownMs: this.deps.settings().buddy.minMinutes * 60_000, ...timing });
     this.textByTitle.clear();
+    this.appByTitle.clear();
     this.conceptsAt = 0;
   }
 
@@ -87,6 +90,7 @@ export class BuddyService {
     const prev = this.textByTitle.get(e.title) ?? "";
     // Keep the most recent ~3000 characters read on this page.
     this.textByTitle.set(e.title, (prev ? `${prev}\n\n${e.text}` : e.text).slice(-3000));
+    this.appByTitle.set(e.title, e.app);
   }
 
   /** Each screen check: where you are now; maybe it's the moment to appear. */
@@ -98,7 +102,8 @@ export class BuddyService {
       this.conceptsAt = Date.now();
     }
     const now = Date.now();
-    this.trigger.observe(now, focusFor(o.page, o.title, this.textByTitle.get(o.title) ?? "", this.concepts));
+    const focus = focusFor(o.page, o.title, this.textByTitle.get(o.title) ?? "", this.concepts);
+    this.trigger.observe(now, { ...focus, app: this.appByTitle.get(o.title) });
     if (this.chat || this.preparing) return;
     const settings = this.deps.settings().buddy;
     const decision = this.trigger.decide(now, {
@@ -121,16 +126,18 @@ export class BuddyService {
     this.preparing = true;
     try {
       const known = this.concepts.map((x) => x.name);
-      const q = await buddyQuestion(
-        { character, name: displayName(character, name), course: s.courseName, focusLabel: c.focus.label, text: c.focus.text ?? "", knownConcepts: known },
-        this.deps.model(),
+      const { value: q, cloud } = await tracked(() =>
+        buddyQuestion(
+          { character, name: displayName(character, name), course: s.courseName, focusLabel: c.focus.label, text: c.focus.text ?? "", knownConcepts: known },
+          this.deps.model([c.focus.app ?? ""]),
+        ),
       );
       // Things may have changed while the question was being written (the AI may have been busy with
       // math re-reads): if you've started circling, or are well into the next thing, let it go.
       const stale = Date.now() - c.finishedAt > this.trigger.opts.graceMs + 30_000;
       if (this.session !== s || this.deps.asker.isBusy() || stale) return void this.trigger.dropPending();
       this.trigger.shown(Date.now(), c);
-      this.open(s, c, character, name, q);
+      this.open(s, c, character, name, { ...q, cloud });
     } catch (err) {
       console.log(`[buddy] couldn't think of a question: ${(err as Error).message}`);
       this.trigger.dropPending();
@@ -140,8 +147,8 @@ export class BuddyService {
   }
 
   /** Opens the window with a question. (Also used by development checks with a made-up candidate.) */
-  open(s: BuddySession, c: Candidate, character: BuddyCharacter, name: string, q: { question: string; concept: string }) {
-    const turns: BuddyTurn[] = [{ who: "buddy", text: q.question, at: new Date().toISOString() }];
+  open(s: BuddySession, c: Candidate, character: BuddyCharacter, name: string, q: { question: string; concept: string; cloud?: boolean }) {
+    const turns: BuddyTurn[] = [{ who: "buddy", text: q.question, at: new Date().toISOString(), ...(q.cloud ? { cloud: true } : {}) }];
     const id = this.deps.db.addBuddyChat({
       sessionId: s.sessionId,
       courseId: s.courseId,
@@ -158,6 +165,7 @@ export class BuddyService {
       mood: "asking",
       line: q.question,
       canAnswer: true,
+      cloud: q.cloud,
       voice: this.deps.asker.canDictate() ? "ready" : "off",
       done: false,
     };
@@ -231,12 +239,14 @@ export class BuddyService {
     this.resetIgnoredTimer();
     chat.turns.push({ who: "you", text: clean, at: new Date().toISOString() });
     this.deps.db.updateBuddyChat(chat.id, { turns: chat.turns });
-    this.set({ mood: "thinking", line: "Hmm…", canAnswer: false, partial: undefined });
+    this.set({ mood: "thinking", line: "Hmm…", canAnswer: false, partial: undefined, cloud: false });
     try {
-      const r = await urgently(() =>
-        buddyReact(
-          { character: this.view!.character, name: this.view!.name, course: s.courseName, text: chat.candidate.focus.text ?? "", turns: chat.turns },
-          this.deps.model(),
+      const { value: r, cloud } = await tracked(() =>
+        urgently(() =>
+          buddyReact(
+            { character: this.view!.character, name: this.view!.name, course: s.courseName, text: chat.candidate.focus.text ?? "", turns: chat.turns },
+            this.deps.model([chat.candidate.focus.app ?? ""]),
+          ),
         ),
       );
       if (this.chat !== chat) return; // closed meanwhile
@@ -245,9 +255,9 @@ export class BuddyService {
       const step = nextStep(r.verdict, chat.followUps, r.followUp);
       if (step.ask) {
         chat.followUps++;
-        chat.turns.push({ who: "buddy", text: step.ask, at: new Date().toISOString() });
+        chat.turns.push({ who: "buddy", text: step.ask, at: new Date().toISOString(), ...(cloud ? { cloud } : {}) });
         this.deps.db.updateBuddyChat(chat.id, { turns: chat.turns });
-        this.set({ mood: "confused", line: step.ask, canAnswer: true });
+        this.set({ mood: "confused", line: step.ask, canAnswer: true, cloud });
         return;
       }
       const line = closingLine(this.view!.character, step.mood === "happy" ? "happy" : "thanks");

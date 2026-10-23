@@ -1,6 +1,7 @@
 // The popup after circling: what was sent, your question, and the answer with the hint ladder.
 import { useEffect, useRef, useState } from "react";
 import type { AskInfo, HintLevelId } from "../../shared/types.ts";
+import CloudTag from "./CloudTag.tsx";
 import Rich from "./Rich.tsx";
 
 const LEVELS: { id: HintLevelId; label: string }[] = [
@@ -17,6 +18,7 @@ type Turn = {
   reason?: string;
   concept?: string;
   sources?: { title: string; when: string }[];
+  cloud?: boolean; // undefined until a model starts on it; true = Gemini (fast mode)
 };
 
 export default function Ask({ askId }: { askId: string }) {
@@ -49,6 +51,7 @@ export default function Ask({ askId }: { askId: string }) {
           const t = { ...next[e.turn] };
           if (e.type === "sources") t.sources = e.sources;
           if (e.type === "text") t.text += e.text;
+          if (e.type === "where") Object.assign(t, { cloud: e.cloud, text: "" }); // a fresh start if the cloud failed partway
           if (e.type === "done") t.status = "done";
           if (e.type === "error") Object.assign(t, { status: "error", text: e.message });
           next[e.turn] = t;
@@ -95,7 +98,7 @@ export default function Ask({ askId }: { askId: string }) {
           <img src={info.thumbnail} alt="What was sent" className={`w-full object-contain ${bigImage ? "" : "max-h-36"}`} />
         </button>
         <p className="mb-6 text-[12px] text-muted">
-          {info.circled ? "What you circled" : "Around your cursor"} — exactly what's sent to the AI on your Mac.
+          {info.circled ? "What you circled" : "Around your cursor"} — exactly what the AI sees.
         </p>
 
         {!asked ? (
@@ -161,14 +164,17 @@ export default function Ask({ askId }: { askId: string }) {
             {waiting ? (
               <p className="card appear flex items-center gap-3 px-6 py-4 text-muted">
                 <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                Waiting for the AI to finish what it's doing…
+                Finding your notes on this…
               </p>
             ) : null}
             {turns.map((t, i) => (
               <div key={i} className="card appear p-6">
-                <p className="eyebrow">
-                  {LEVELS.find((l) => l.id === t.level)?.label}
-                  {t.concept ? <span className="font-medium text-muted"> · {t.concept}</span> : null}
+                <p className="eyebrow flex items-center gap-2">
+                  <span>
+                    {LEVELS.find((l) => l.id === t.level)?.label}
+                    {t.concept ? <span className="font-medium text-muted"> · {t.concept}</span> : null}
+                  </span>
+                  {t.cloud && t.status !== "error" ? <CloudTag className="ml-auto" /> : null}
                 </p>
                 {t.reason ? <p className="mt-1 text-[12px] text-muted italic">{t.reason}</p> : null}
                 <div className="mb-3" />
@@ -179,7 +185,7 @@ export default function Ask({ askId }: { askId: string }) {
                 ) : (
                   <p className="flex items-center gap-2 text-muted">
                     <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    Thinking… (the first answer can take ~15 s while the model loads)
+                    {t.cloud === false ? "Thinking… (the model on your Mac can take ~15 s to start)" : "Thinking…"}
                   </p>
                 )}
                 {t.sources?.length && t.status !== "error" ? (

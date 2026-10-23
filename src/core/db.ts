@@ -177,6 +177,10 @@ const MIGRATIONS = [
      outcome    TEXT                        -- NULL = open | understood | gap | skipped
    );
    CREATE INDEX buddy_chats_session ON buddy_chats(session_id, started_at);`,
+  // 8: Fast mode — whether a quiz or a note section was written by the cloud model (for the "sent to cloud"
+  // label). Summaries, answers and buddy chats keep this inside their JSON.
+  `ALTER TABLE sessions ADD COLUMN quiz_cloud INTEGER;
+   ALTER TABLE note_sections ADD COLUMN cloud INTEGER;`,
 ];
 
 type Row = Record<string, any>;
@@ -380,7 +384,7 @@ export class StudyDb {
   }
 
   /** Adds new material to a topic (creating it if needed), all at once. */
-  saveTopicNotes(n: { courseId: string; title: string; key: string; summary: string; sessionId: string; sections: NoteSectionDraft[] }): string {
+  saveTopicNotes(n: { courseId: string; title: string; key: string; summary: string; sessionId: string; sections: NoteSectionDraft[]; cloud?: boolean }): string {
     const now = new Date().toISOString();
     this.db.exec("BEGIN");
     try {
@@ -394,9 +398,9 @@ export class StudyDb {
         this.db.prepare("UPDATE topics SET summary = ?, updated_at = ? WHERE id = ?").run(n.summary, now, id);
       }
       const insert = this.db.prepare(
-        "INSERT INTO note_sections (id, topic_id, session_id, chunk_id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO note_sections (id, topic_id, session_id, chunk_id, kind, title, body, created_at, cloud) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      for (const s of n.sections) insert.run(randomUUID(), id, n.sessionId, s.passageId, s.kind, s.title, s.body, now);
+      for (const s of n.sections) insert.run(randomUUID(), id, n.sessionId, s.passageId, s.kind, s.title, s.body, now, n.cloud ? 1 : null);
       this.db.exec("COMMIT");
       return id;
     } catch (e) {
@@ -440,6 +444,7 @@ export class StudyDb {
       sessionId: r.session_id,
       capturedAt: r.captured_at ?? undefined,
       sourceTitle: r.source_title ?? undefined,
+      ...(r.cloud ? { cloud: true } : {}),
     }));
     return { id: t.id, courseId: t.course_id, title: t.title, summary: t.summary, createdAt: t.created_at, updatedAt: t.updated_at, sections };
   }
@@ -465,7 +470,7 @@ export class StudyDb {
   /** The session's text passages, in order, for the AI. */
   getPassages(sessionId: string): Passage[] {
     return this.db
-      .prepare("SELECT id, text, source_title AS sourceTitle FROM chunks WHERE session_id = ? ORDER BY captured_at, rowid")
+      .prepare("SELECT id, text, source_title AS sourceTitle, source_app AS sourceApp FROM chunks WHERE session_id = ? ORDER BY captured_at, rowid")
       .all(sessionId) as Passage[];
   }
 
@@ -479,7 +484,7 @@ export class StudyDb {
   }
 
   /** Saves a new quiz (replacing none: a session gets one quiz). */
-  saveQuiz(sessionId: string, courseId: string, questions: QuizDraft[]) {
+  saveQuiz(sessionId: string, courseId: string, questions: QuizDraft[], cloud = false) {
     const insert = this.db.prepare(
       `INSERT INTO quiz_items (id, course_id, session_id, chunk_id, position, type, question, options, answer, created_at, concept_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -490,7 +495,7 @@ export class StudyDb {
       insert.run(randomUUID(), courseId, sessionId, q.passageId, i, q.type, q.question,
         q.options ? JSON.stringify(q.options) : null, q.answer, now, q.conceptId ?? null),
     );
-    this.db.prepare("UPDATE sessions SET quiz_total = ?, quiz_correct = 0, quiz_note = NULL WHERE id = ?").run(questions.length, sessionId);
+    this.db.prepare("UPDATE sessions SET quiz_total = ?, quiz_correct = 0, quiz_note = NULL, quiz_cloud = ? WHERE id = ?").run(questions.length, cloud ? 1 : null, sessionId);
     this.db.exec("COMMIT");
   }
 
@@ -500,6 +505,11 @@ export class StudyDb {
 
   getQuizNote(sessionId: string): string | null {
     return ((this.db.prepare("SELECT quiz_note FROM sessions WHERE id = ?").get(sessionId) as Row | undefined)?.quiz_note) ?? null;
+  }
+
+  /** The quiz was written by the cloud model. */
+  quizCloud(sessionId: string): boolean {
+    return !!(this.db.prepare("SELECT quiz_cloud FROM sessions WHERE id = ?").get(sessionId) as Row | undefined)?.quiz_cloud;
   }
 
   hasQuiz(sessionId: string): boolean {
@@ -563,10 +573,10 @@ export class StudyDb {
     return id;
   }
 
-  addAnswer(questionId: string, level: string, text: string) {
+  addAnswer(questionId: string, level: string, text: string, cloud = false) {
     const r = this.db.prepare("SELECT answers FROM questions WHERE id = ?").get(questionId) as Row | undefined;
     if (!r) return;
-    const answers = [...JSON.parse(r.answers), { level, text, at: new Date().toISOString() }];
+    const answers = [...JSON.parse(r.answers), { level, text, at: new Date().toISOString(), ...(cloud ? { cloud: true } : {}) }];
     this.db.prepare("UPDATE questions SET answers = ? WHERE id = ?").run(JSON.stringify(answers), questionId);
   }
 
@@ -732,13 +742,14 @@ export class StudyDb {
   coursePassages(courseId: string, excludeSessionId?: string): (Passage & { sessionId: string; startedAt: string; embedding?: Float32Array })[] {
     return (this.db
       .prepare(
-        `SELECT c.id, c.text, c.source_title, c.session_id, c.embedding, s.started_at FROM chunks c JOIN sessions s ON s.id = c.session_id
+        `SELECT c.id, c.text, c.source_title, c.source_app, c.session_id, c.embedding, s.started_at FROM chunks c JOIN sessions s ON s.id = c.session_id
          WHERE c.course_id = ? AND (? IS NULL OR c.session_id <> ?) ORDER BY c.captured_at`,
       )
       .all(courseId, excludeSessionId ?? null, excludeSessionId ?? null) as Row[]).map((r) => ({
       id: r.id,
       text: r.text,
       sourceTitle: r.source_title,
+      sourceApp: r.source_app,
       sessionId: r.session_id,
       startedAt: r.started_at,
       embedding: r.embedding ? new Float32Array(new Uint8Array(r.embedding).buffer) : undefined,
@@ -834,7 +845,7 @@ export class StudyDb {
       character: r.character,
       buddyName: r.buddy_name,
       startedAt: r.started_at,
-      turns: (JSON.parse(r.turns) as BuddyTurn[]).filter((t) => t.text).map(({ who, text, at }) => ({ who, text, at })),
+      turns: (JSON.parse(r.turns) as BuddyTurn[]).filter((t) => t.text).map(({ who, text, at, cloud }) => ({ who, text, at, ...(cloud ? { cloud } : {}) })),
       outcome: r.outcome ?? null,
     }));
   }

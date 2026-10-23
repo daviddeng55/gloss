@@ -1,6 +1,7 @@
 // Where the AI runs. Every model call in Gloss goes through one `ModelProvider`, so the place the models
-// run can be swapped (Ollama on this Mac today; maybe Apple's on-device model or a cloud model later)
-// without touching the features that use them. ai.ts holds the prompts; this file only moves bytes.
+// run can be swapped without touching the features that use them: Ollama on this Mac, or Gemini (Google's
+// cloud models) in fast mode. ai.ts holds the prompts and decides which one to use; this file only moves bytes.
+import { redact } from "./redact.ts";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string; images?: string[] };
 
@@ -20,10 +21,13 @@ export type ChatRequest = {
 
 /** Why a call failed, in words a student can act on. */
 export class AiError extends Error {
-  readonly code: "not-running" | "model-missing" | "bad-output" | "failed";
-  constructor(code: AiError["code"], message: string) {
+  readonly code: "not-running" | "model-missing" | "bad-output" | "failed" | "offline" | "rate-limited" | "bad-key";
+  /** For "rate-limited": how long the provider asked us to wait, if it said. */
+  readonly retryAfterMs?: number;
+  constructor(code: AiError["code"], message: string, retryAfterMs?: number) {
     super(message);
     this.code = code;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -40,8 +44,10 @@ export interface ModelProvider {
   embed(model: string, inputs: string[]): Promise<number[][]>;
   /** Models available, or null if the provider can't be reached. */
   models(): Promise<string[] | null>;
-  /** Frees memory used by every model except `keep` (no-op where that doesn't apply). */
-  unloadOthers(keep: string): Promise<void>;
+  /** Frees memory used by every model except those in `keep` (no-op where that doesn't apply). */
+  unloadOthers(keep: string[]): Promise<void>;
+  /** Loads a model into memory ahead of use, so the first answer doesn't wait for it (optional). */
+  load?(model: string): Promise<void>;
 }
 
 /** How long Ollama keeps a model in memory after its last use. */
@@ -154,13 +160,187 @@ export class OllamaProvider implements ModelProvider {
     }
   }
 
-  async unloadOthers(keep: string): Promise<void> {
+  async unloadOthers(keep: string[]): Promise<void> {
     const ps = (await (await fetch(`${this.baseUrl}/api/ps`, { signal: AbortSignal.timeout(3000) })).json()) as { models?: { name: string }[] };
     for (const m of ps.models ?? []) {
-      if (m.name === keep) continue;
+      if (keep.some((k) => m.name === k || m.name === `${k}:latest`)) continue;
       await fetch(`${this.baseUrl}/api/generate`, { method: "POST", body: JSON.stringify({ model: m.name, keep_alive: 0 }), signal: AbortSignal.timeout(10_000) });
     }
   }
+
+  async load(model: string): Promise<void> {
+    await this.post("/api/generate", JSON.stringify({ model, keep_alive: KEEP_ALIVE }), AbortSignal.timeout(60_000), model);
+  }
+}
+
+/** The fastest Gemini Flash model (Google's docs, Oct 2026: "our fastest, most cost-effective 3.5 model"). */
+export const GEMINI_FAST_MODEL = "gemini-3.5-flash-lite";
+
+/** Gemini replies must start within this long, or we give up and use the local model instead. */
+const FIRST_PIECE_MS = 20_000;
+
+/** JPEG or PNG, from the first bytes of the base64 text. */
+function imageType(base64: string): string {
+  return base64.startsWith("iVBOR") ? "image/png" : "image/jpeg";
+}
+
+/**
+ * The least thinking each Gemini model allows (thinking adds seconds before the first word). Gemini 3.x
+ * Flash-Lite and Flash take "minimal", 3.8 Flash only goes down to "low", 2.5 Flash turns off with a budget of 0.
+ */
+function leastThinking(model: string): object {
+  if (/^gemini-2\./.test(model)) return /lite/.test(model) ? {} : { thinkingConfig: { thinkingBudget: 0 } };
+  if (/^gemini-3\.8/.test(model)) return { thinkingConfig: { thinkingLevel: "low" } };
+  return { thinkingConfig: { thinkingLevel: "minimal" } };
+}
+
+/**
+ * Google's Gemini models in the cloud, with the student's own API key (kept in the macOS Keychain; this
+ * class only holds it in memory). Every piece of text is passed through the redaction filter again on its
+ * way out. Used only when the student turned on fast mode; ai.ts falls back to Ollama if a call fails.
+ */
+export class GeminiProvider implements ModelProvider {
+  readonly name = "gemini";
+  readonly baseUrl: string;
+  private key: string;
+
+  constructor(key: string, baseUrl = "https://generativelanguage.googleapis.com/v1beta") {
+    this.key = key;
+    this.baseUrl = baseUrl;
+  }
+
+  /** Gemini's request format. Exported shape for tests via `requestBody`. */
+  requestBody(req: ChatRequest, withThinking = true): string {
+    const clean = (t: string) => redact(t).text;
+    const system = req.messages.filter((m) => m.role === "system").map((m) => clean(m.content)).join("\n\n");
+    const contents = req.messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [...(m.images ?? []).map((data) => ({ inlineData: { mimeType: imageType(data), data } })), { text: clean(m.content) }],
+      }));
+    return JSON.stringify({
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      contents,
+      generationConfig: {
+        temperature: req.temperature ?? 0.2,
+        ...(req.maxTokens ? { maxOutputTokens: req.maxTokens } : {}),
+        ...(req.stop ? { stopSequences: req.stop.slice(0, 5) } : {}),
+        ...(req.schema ? { responseMimeType: "application/json", responseJsonSchema: req.schema } : {}),
+        ...(withThinking && !req.think ? leastThinking(req.model) : {}),
+      },
+    });
+  }
+
+  /** Turns an error reply into an AiError (never including the key). */
+  private async failure(res: Response, model: string): Promise<AiError> {
+    const text = await res.text().catch(() => "");
+    let message = text;
+    let retryAfterMs: number | undefined;
+    try {
+      const err = (JSON.parse(text) as { error?: { message?: string; details?: { retryDelay?: string }[] } }).error;
+      message = err?.message ?? text;
+      const delay = err?.details?.find((d) => d.retryDelay)?.retryDelay; // e.g. "17s"
+      if (delay) retryAfterMs = Math.ceil(parseFloat(delay) * 1000);
+    } catch {
+      /* not JSON */
+    }
+    const header = Number(res.headers.get("retry-after"));
+    if (!retryAfterMs && header > 0) retryAfterMs = header * 1000;
+    message = message.replaceAll(this.key, "…").slice(0, 200);
+    if (res.status === 429) return new AiError("rate-limited", "Gemini's rate limit was reached.", retryAfterMs);
+    if (res.status === 401 || res.status === 403 || /api[_ ]key/i.test(message)) {
+      return new AiError("bad-key", "Gemini didn't accept the API key. Check it in Settings.");
+    }
+    if (res.status === 404) return new AiError("model-missing", `Gemini has no model called "${model}".`);
+    return new AiError("failed", `Gemini error ${res.status}: ${message}`);
+  }
+
+  async chat(req: ChatRequest): Promise<string> {
+    return this.stream(req, () => {});
+  }
+
+  async stream(req: ChatRequest, onText: (piece: string) => boolean | void): Promise<string> {
+    const abort = new AbortController();
+    const giveUp = (why: string) => abort.abort(new DOMException(why, "TimeoutError"));
+    const firstTimer = setTimeout(() => giveUp("Gemini didn't start answering in time."), FIRST_PIECE_MS);
+    const timer = setTimeout(() => giveUp("Gemini took too long to answer."), req.timeoutMs ?? 120_000);
+    let stopped = false;
+    let text = "";
+    try {
+      const send = (withThinking: boolean) =>
+        fetch(`${this.baseUrl}/models/${encodeURIComponent(req.model)}:streamGenerateContent?alt=sse`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": this.key },
+          body: this.requestBody(req, withThinking),
+          signal: abort.signal,
+        });
+      let res = await send(true);
+      // A model that doesn't take our thinking setting: ask again with its default.
+      if (res.status === 400) {
+        const body = await res.clone().text();
+        if (/thinking/i.test(body)) res = await send(false);
+      }
+      if (!res.ok) throw await this.failure(res, req.model);
+      if (!res.body) throw new AiError("failed", "Gemini sent an empty reply.");
+      let buffer = "";
+      const decoder = new TextDecoder();
+      reading: for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line.startsWith("data:")) continue;
+          const part = JSON.parse(line.slice(5)) as {
+            candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
+            promptFeedback?: { blockReason?: string };
+            error?: { message?: string };
+          };
+          if (part.error) throw new AiError("failed", `Gemini: ${part.error.message ?? "error"}`);
+          if (part.promptFeedback?.blockReason) throw new AiError("failed", `Gemini declined this (${part.promptFeedback.blockReason}).`);
+          const piece = (part.candidates?.[0]?.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? "").join("");
+          if (!piece) continue;
+          clearTimeout(firstTimer);
+          text += piece;
+          if (onText(piece) === false) {
+            stopped = true;
+            abort.abort();
+            break reading;
+          }
+        }
+      }
+      if (!text) throw new AiError("failed", "Gemini sent an empty reply.");
+    } catch (err) {
+      if (stopped) return text;
+      if (err instanceof AiError) throw err;
+      if (abort.signal.aborted) throw new AiError("failed", (abort.signal.reason as Error)?.message ?? "Gemini took too long to answer.");
+      if (err instanceof SyntaxError) throw new AiError("failed", "Gemini sent a reply we couldn't read.");
+      throw new AiError("offline", "Couldn't reach Gemini (no internet connection?).");
+    } finally {
+      clearTimeout(firstTimer);
+      clearTimeout(timer);
+    }
+    return text;
+  }
+
+  async embed(): Promise<number[][]> {
+    throw new AiError("failed", "Search by meaning always runs on this Mac.");
+  }
+
+  /** The Gemini models this key can use (null if the key or the network doesn't work). */
+  async models(): Promise<string[] | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/models?pageSize=200`, { headers: { "x-goog-api-key": this.key }, signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) return null;
+      const out = (await res.json()) as { models?: { name: string; supportedGenerationMethods?: string[] }[] };
+      return (out.models ?? []).filter((m) => m.supportedGenerationMethods?.includes("generateContent")).map((m) => m.name.replace(/^models\//, ""));
+    } catch {
+      return null;
+    }
+  }
+
+  async unloadOthers(): Promise<void> {}
 }
 
 /**
@@ -197,7 +377,7 @@ export class MockProvider implements ModelProvider {
     return this.available;
   }
 
-  async unloadOthers(): Promise<void> {}
+  async unloadOthers(_keep: string[]): Promise<void> {}
 }
 
 // Tests (node --test sets NODE_TEST_CONTEXT) never reach a real model unless they choose to.
