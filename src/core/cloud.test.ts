@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { chat, embed, partialPoints, setCloud, streamReply, summarizeSession, tracked, withModel } from "./ai.ts";
 import { allFromStudyApps, cleanAppList, DEFAULT_STUDY_APPS, isStudyApp, looksSensitive } from "./cloud.ts";
+import { looksLikeApiKey } from "./keychain.ts";
 import { AiError, GeminiProvider, MockProvider, provider, setProvider, type ChatRequest } from "./provider.ts";
 import { sanitizeSettings, DEFAULT_SETTINGS_FILE } from "./settings.ts";
 
@@ -252,6 +253,15 @@ test("privacy: only study apps on the list, and pictures with sensitive text, st
   assert.ok(!looksSensitive("lim sin(n)/n = 0 by the squeeze theorem"));
   assert.deepEqual(cleanAppList(["Preview", " preview ", "", "  Notion  "]), ["Preview", "Notion"]);
   assert.deepEqual(cleanAppList(undefined), DEFAULT_STUDY_APPS);
+});
+
+test("keys: both Gemini key formats are accepted; anything that could break the Keychain command isn't", () => {
+  assert.ok(looksLikeApiKey("AIzaSyD-made_up_0123456789abcdefghij")); // standard key (before May 2026)
+  assert.ok(looksLikeApiKey("AQ.Ab8RN6Lmadeup-key_0123456789abcdefghijklmnop")); // auth key (AI Studio now)
+  assert.ok(!looksLikeApiKey("short"));
+  assert.ok(!looksLikeApiKey('AQ.Ab8RN6Lmadeup"; rm -rf ~; "0123456789'));
+  assert.ok(!looksLikeApiKey("AQ.Ab8RN6L madeup 0123456789abcdefghij"));
+  assert.ok(!looksLikeApiKey("AQ.Ab8RN6Lmadeup\\0123456789abcdefghij"));
 });
 
 test("settings: fast mode is on by default (it only works once a key is saved) and odd model names are refused", () => {

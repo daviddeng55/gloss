@@ -42,7 +42,9 @@ export class CloudService {
   /** Checks the key with a tiny request, then saves it in the Keychain. */
   async saveKey(key: string): Promise<{ ok: boolean; message: string }> {
     const k = key.trim();
-    if (!looksLikeApiKey(k)) return { ok: false, message: "That doesn't look like a Gemini API key (it's a long code of letters and digits)." };
+    if (!looksLikeApiKey(k)) {
+      return { ok: false, message: "That doesn't look like a Gemini API key: it should be one long code (starting with AQ. or AIza) with no spaces or quotes." };
+    }
     const test = await this.check(new GeminiProvider(k));
     if (!test.ok) return test;
     try {

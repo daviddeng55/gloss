@@ -6,9 +6,13 @@ import { execFile, spawn } from "node:child_process";
 const SERVICE = "Gloss Gemini API key";
 const ACCOUNT = "gloss";
 
-/** Gemini keys are letters, digits, "-" and "_" (also keeps the key from breaking the command below). */
+/**
+ * Gemini keys: older "standard" keys (AIza…: letters, digits, "-", "_") and, since May 2026, "auth keys"
+ * (AQ.…, which also have dots and may have base64 characters). Quotes, backslashes and spaces are never
+ * allowed, which also keeps the key from breaking the command below.
+ */
 export function looksLikeApiKey(key: string): boolean {
-  return /^[A-Za-z0-9_-]{20,200}$/.test(key);
+  return /^[A-Za-z0-9._~+/=-]{20,400}$/.test(key);
 }
 
 /** The saved key, or null if there isn't one. */

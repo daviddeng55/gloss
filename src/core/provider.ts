@@ -250,7 +250,7 @@ export class GeminiProvider implements ModelProvider {
     message = message.replaceAll(this.key, "…").slice(0, 200);
     if (res.status === 429) return new AiError("rate-limited", "Gemini's rate limit was reached.", retryAfterMs);
     if (res.status === 401 || res.status === 403 || /api[_ ]key/i.test(message)) {
-      return new AiError("bad-key", "Gemini didn't accept the API key. Check it in Settings.");
+      return new AiError("bad-key", `Gemini didn't accept the API key (Google says: ${message || `error ${res.status}`}).`);
     }
     if (res.status === 404) return new AiError("model-missing", `Gemini has no model called "${model}".`);
     return new AiError("failed", `Gemini error ${res.status}: ${message}`);
