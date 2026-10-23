@@ -42,11 +42,16 @@ export class CloudService {
   /** Checks the key with a tiny request, then saves it in the Keychain. */
   async saveKey(key: string): Promise<{ ok: boolean; message: string }> {
     const k = key.trim();
+    // AI Studio's key list shows keys shortened ("AQ.Ab8R…wxyz"); copying that text gives an incomplete key.
+    if (/\.\.|…/.test(k)) {
+      return { ok: false, message: "That's the shortened key AI Studio shows in its list. Click the key to open it, then use its Copy button to copy the whole key." };
+    }
     if (!looksLikeApiKey(k)) {
       return { ok: false, message: "That doesn't look like a Gemini API key: it should be one long code (starting with AQ. or AIza) with no spaces or quotes." };
     }
     const test = await this.check(new GeminiProvider(k));
-    if (!test.ok) return test;
+    // The length and the first 3 characters ("AQ." or "AIz") help spot a key that was cut off when copying.
+    if (!test.ok) return { ok: false, message: `${test.message} You pasted ${k.length} characters starting with "${k.slice(0, 3)}".` };
     try {
       await saveApiKey(k);
     } catch (err) {
