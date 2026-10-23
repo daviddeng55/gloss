@@ -131,6 +131,22 @@ export type NoteTree = {
   writing: boolean; // notes are being written right now
 };
 
+/** A key term in a topic's notes that's explained elsewhere: `text` as written, and where it leads. */
+export type NoteXref = { text: string; topicId: string; sectionId?: string; label: string };
+
+/** A course's notes page: units (general headings) with their topics. `id: null` = topics not in a unit. */
+export type CourseNotes = {
+  courseId: string;
+  courseName: string;
+  units: {
+    id: string | null;
+    title: string;
+    topics: { id: string; title: string; summary: string; sections: number; updatedAt: string }[];
+  }[];
+  sorting: boolean; // the AI is sorting topics into units right now
+  canSort: boolean; // some topics aren't in a unit and the AI may sort them
+};
+
 export type NoteTopic = {
   id: string;
   courseId: string;
@@ -139,6 +155,11 @@ export type NoteTopic = {
   summary: string;
   createdAt: string;
   updatedAt: string;
+  unit?: { id: string; title: string };
+  /** Cross-references, by section id ("summary" for the summary). */
+  xrefs?: Record<string, NoteXref[]>;
+  /** Other topics whose notes link to this one, and the terms they link with. */
+  related?: { topicId: string; title: string; courseName: string; terms: string[] }[];
   sections: {
     id: string;
     kind: NoteKind;
@@ -323,6 +344,14 @@ export interface StudyApi {
   getCapture(chunkId: string): Promise<ChunkRow | null>;
   openNotes(topicId: string, sectionId?: string): Promise<void>;
   deleteTopic(id: string): Promise<void>;
+  getCourseNotes(courseId: string): Promise<CourseNotes>;
+  /** Moves a topic into a unit (null = "Other topics"), before another topic or at the end; the AI won't move it back. */
+  moveTopic(topicId: string, unitId: string | null, beforeTopicId?: string): Promise<void>;
+  renameUnit(unitId: string, title: string): Promise<void>;
+  addUnit(courseId: string, title: string): Promise<string>;
+  deleteUnit(unitId: string): Promise<void>;
+  /** Has the AI sort the course's unsorted topics into units now. */
+  sortTopics(courseId: string): Promise<void>;
   /** Notes changed (a topic was written or updated, or writing started/stopped). */
   onNotes(callback: () => void): () => void;
   foundText(chunkId: string, query: string): Promise<string | null>;

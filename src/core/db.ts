@@ -181,6 +181,26 @@ const MIGRATIONS = [
   // label). Summaries, answers and buddy chats keep this inside their JSON.
   `ALTER TABLE sessions ADD COLUMN quiz_cloud INTEGER;
    ALTER TABLE note_sections ADD COLUMN cloud INTEGER;`,
+  // 9: Units — a course's topics grouped under general headings (sorted by the AI; you can rename units and
+  // move topics, which locks them where you put them). And a cache of the cross-references between notes.
+  `CREATE TABLE units (
+     id         TEXT PRIMARY KEY,
+     course_id  TEXT NOT NULL,
+     title      TEXT NOT NULL,
+     key        TEXT NOT NULL,              -- normalized title, for matching the AI's names
+     position   INTEGER NOT NULL,
+     renamed    INTEGER NOT NULL DEFAULT 0, -- you named it (the AI never renames units anyway)
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX units_course ON units(course_id, position);
+   ALTER TABLE topics ADD COLUMN unit_id TEXT REFERENCES units(id) ON DELETE SET NULL;
+   ALTER TABLE topics ADD COLUMN unit_pos INTEGER;                     -- order inside the unit
+   ALTER TABLE topics ADD COLUMN unit_locked INTEGER NOT NULL DEFAULT 0; -- you moved it: the AI leaves it there
+   CREATE TABLE xref_cache (
+     topic_id TEXT PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+     version  TEXT NOT NULL,                -- notesVersion() when computed; recomputed when notes change
+     links    TEXT NOT NULL                 -- JSON { sectionId | "summary": [{text, topicId, sectionId?}] }
+   );`,
 ];
 
 type Row = Record<string, any>;
@@ -446,7 +466,17 @@ export class StudyDb {
       sourceTitle: r.source_title ?? undefined,
       ...(r.cloud ? { cloud: true } : {}),
     }));
-    return { id: t.id, courseId: t.course_id, title: t.title, summary: t.summary, createdAt: t.created_at, updatedAt: t.updated_at, sections };
+    const unit = t.unit_id ? (this.db.prepare("SELECT id, title FROM units WHERE id = ?").get(t.unit_id) as Row | undefined) : undefined;
+    return {
+      id: t.id,
+      courseId: t.course_id,
+      title: t.title,
+      summary: t.summary,
+      createdAt: t.created_at,
+      updatedAt: t.updated_at,
+      sections,
+      ...(unit ? { unit: { id: unit.id as string, title: unit.title as string } } : {}),
+    };
   }
 
   /** One raw capture, for the "from Oct 14, 2:14 PM" links in notes. */
@@ -458,11 +488,155 @@ export class StudyDb {
   /** Deletes a topic's notes. The captures they were written from stay. */
   deleteTopic(id: string) {
     this.db.prepare("DELETE FROM topics WHERE id = ?").run(id); // its sections cascade
+    this.removeEmptyTopics(); // and a unit the AI made, if it's now empty
   }
 
   /** Topics left without any sections (their sessions or passages were deleted) are removed. */
   private removeEmptyTopics() {
     this.db.exec("DELETE FROM topics WHERE id NOT IN (SELECT topic_id FROM note_sections)");
+    // Units the AI made that have nothing left in them go too (ones you named stay).
+    this.db.exec("DELETE FROM units WHERE renamed = 0 AND id NOT IN (SELECT unit_id FROM topics WHERE unit_id IS NOT NULL)");
+  }
+
+  // ---------- units (a course's topics under general headings) ----------
+
+  /** A course's units in order, and its topics with the unit each is in (null = not sorted yet). */
+  courseNotes(courseId: string): {
+    units: { id: string; title: string; renamed: boolean }[];
+    topics: { id: string; title: string; summary: string; sections: number; updatedAt: string; unitId: string | null; locked: boolean }[];
+  } {
+    const units = (this.db.prepare("SELECT id, title, renamed FROM units WHERE course_id = ? ORDER BY position").all(courseId) as Row[]).map((r) => ({
+      id: r.id as string,
+      title: r.title as string,
+      renamed: !!r.renamed,
+    }));
+    const topics = (this.db
+      .prepare(
+        `SELECT t.id, t.title, t.summary, t.updated_at, t.unit_id, t.unit_locked, COUNT(n.seq) AS sections
+         FROM topics t LEFT JOIN note_sections n ON n.topic_id = t.id WHERE t.course_id = ?
+         GROUP BY t.id ORDER BY COALESCE(t.unit_pos, 1e9), t.created_at`,
+      )
+      .all(courseId) as Row[]).map((r) => ({
+      id: r.id as string,
+      title: r.title as string,
+      summary: r.summary as string,
+      sections: r.sections as number,
+      updatedAt: r.updated_at as string,
+      unitId: (r.unit_id as string | null) ?? null,
+      locked: !!r.unit_locked,
+    }));
+    return { units, topics };
+  }
+
+  /** Courses with topics the AI may still sort into units (not in a unit, and not placed by you). */
+  coursesWithUnsortedTopics(): string[] {
+    return (this.db.prepare("SELECT DISTINCT course_id FROM topics WHERE unit_id IS NULL AND unit_locked = 0").all() as Row[]).map((r) => r.course_id);
+  }
+
+  /** A new unit at the end of the course's list. */
+  createUnit(courseId: string, title: string, key: string, renamed = false): string {
+    const id = randomUUID();
+    const pos = ((this.db.prepare("SELECT MAX(position) AS p FROM units WHERE course_id = ?").get(courseId) as Row).p ?? -1) + 1;
+    this.db
+      .prepare("INSERT INTO units (id, course_id, title, key, position, renamed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, courseId, title, key, pos, renamed ? 1 : 0, new Date().toISOString());
+    return id;
+  }
+
+  renameUnit(unitId: string, title: string, key: string) {
+    this.db.prepare("UPDATE units SET title = ?, key = ?, renamed = 1 WHERE id = ?").run(title, key, unitId);
+  }
+
+  /** Removes a unit; its topics (if any) go back to "not sorted" without being re-sorted by the AI. */
+  deleteUnit(unitId: string) {
+    this.db.prepare("UPDATE topics SET unit_id = NULL, unit_pos = NULL, unit_locked = 1 WHERE unit_id = ?").run(unitId);
+    this.db.prepare("DELETE FROM units WHERE id = ?").run(unitId);
+  }
+
+  /**
+   * Puts a topic in a unit (null = "Other topics"), before `beforeTopicId` or at the end. `byYou` locks it
+   * there, so the AI never moves it again. A topic only moves within its own course.
+   */
+  placeTopic(topicId: string, unitId: string | null, opts: { byYou: boolean; beforeTopicId?: string }) {
+    const t = this.db.prepare("SELECT course_id, unit_id, unit_locked FROM topics WHERE id = ?").get(topicId) as Row | undefined;
+    if (!t) return;
+    // The AI only places topics that are still unsorted: never one you've placed, or moved meanwhile.
+    if (!opts.byYou && (t.unit_locked || t.unit_id)) return;
+    if (unitId && !(this.db.prepare("SELECT 1 FROM units WHERE id = ? AND course_id = ?").get(unitId, t.course_id))) return;
+    const order = (this.db
+      .prepare(
+        `SELECT id FROM topics WHERE course_id = ? AND id <> ? AND unit_id IS ? ORDER BY COALESCE(unit_pos, 1e9), created_at`,
+      )
+      .all(t.course_id, topicId, unitId) as Row[]).map((r) => r.id as string);
+    const at = opts.beforeTopicId ? order.indexOf(opts.beforeTopicId) : -1;
+    order.splice(at < 0 ? order.length : at, 0, topicId);
+    const setPos = this.db.prepare("UPDATE topics SET unit_pos = ? WHERE id = ?");
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("UPDATE topics SET unit_id = ?, unit_locked = CASE WHEN ? THEN 1 ELSE unit_locked END WHERE id = ?").run(unitId, opts.byYou ? 1 : 0, topicId);
+      order.forEach((id, i) => setPos.run(i, id));
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  /** The apps a course's notes were read from (fast mode only sends notes from study apps). */
+  courseNoteApps(courseId: string): string[] {
+    return (this.db
+      .prepare(
+        `SELECT DISTINCT c.source_app FROM note_sections n JOIN topics t ON t.id = n.topic_id JOIN chunks c ON c.id = n.chunk_id
+         WHERE t.course_id = ?`,
+      )
+      .all(courseId) as Row[]).map((r) => r.source_app);
+  }
+
+  // ---------- cross-references between notes (cached) ----------
+
+  /** Changes whenever any notes are added, changed or deleted (so cached cross-references are redone). */
+  notesVersion(): string {
+    const n = this.db.prepare("SELECT COUNT(*) AS c, MAX(seq) AS m FROM note_sections").get() as Row;
+    const t = this.db.prepare("SELECT COUNT(*) AS c, MAX(updated_at) AS m FROM topics").get() as Row;
+    return `${n.c}:${n.m ?? 0}:${t.c}:${t.m ?? ""}`;
+  }
+
+  /** Every topic with its sections, for finding cross-references. */
+  allNotes(): { id: string; courseId: string; title: string; summary: string; sections: { id: string; kind: string; title: string; body: string }[] }[] {
+    const sections = new Map<string, { id: string; kind: string; title: string; body: string }[]>();
+    for (const r of this.db.prepare("SELECT id, topic_id, kind, title, body FROM note_sections ORDER BY seq").all() as Row[]) {
+      const list = sections.get(r.topic_id) ?? [];
+      list.push({ id: r.id, kind: r.kind, title: r.title, body: r.body });
+      sections.set(r.topic_id, list);
+    }
+    return (this.db.prepare("SELECT id, course_id, title, summary FROM topics ORDER BY created_at").all() as Row[]).map((r) => ({
+      id: r.id,
+      courseId: r.course_id,
+      title: r.title,
+      summary: r.summary,
+      sections: sections.get(r.id) ?? [],
+    }));
+  }
+
+  /** Cached cross-references, if they were worked out for this version of the notes. */
+  cachedXrefs(version: string): Map<string, Record<string, { text: string; topicId: string; sectionId?: string }[]>> | null {
+    const rows = this.db.prepare("SELECT topic_id, version, links FROM xref_cache").all() as Row[];
+    const topics = (this.db.prepare("SELECT COUNT(*) AS c FROM topics").get() as Row).c as number;
+    if (rows.length !== topics || rows.some((r) => r.version !== version)) return null;
+    return new Map(rows.map((r) => [r.topic_id as string, JSON.parse(r.links)]));
+  }
+
+  saveXrefs(version: string, xrefs: Map<string, Record<string, { text: string; topicId: string; sectionId?: string }[]>>) {
+    const insert = this.db.prepare("INSERT INTO xref_cache (topic_id, version, links) VALUES (?, ?, ?)");
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec("DELETE FROM xref_cache");
+      for (const [topicId, links] of xrefs) insert.run(topicId, version, JSON.stringify(links));
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   // ---------- Stage 3: summary and quiz ----------
@@ -797,6 +971,7 @@ export class StudyDb {
     this.db.prepare("DELETE FROM sessions WHERE course_id = ?").run(courseId);
     this.db.prepare("DELETE FROM concepts WHERE course_id = ?").run(courseId);
     this.removeEmptyTopics();
+    this.db.prepare("DELETE FROM units WHERE course_id = ? AND id NOT IN (SELECT unit_id FROM topics WHERE unit_id IS NOT NULL)").run(courseId);
     this.db.exec("COMMIT");
   }
 

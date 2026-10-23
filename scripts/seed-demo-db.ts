@@ -152,7 +152,7 @@ db.saveTopicNotes({
   courseId: "math135",
   title: "Strong Induction",
   key: topicKey("Strong Induction"),
-  summary: "Strong induction proves $P(n)$ for every $n \\in \\mathbb{N}$ by assuming **all** earlier cases $P(1), \\dots, P(k)$ when proving $P(k+1)$. It is handy when a step depends on more than one earlier case, as with the Fibonacci numbers.",
+  summary: "Strong induction proves $P(n)$ for every $n \\in \\mathbb{N}$ by assuming **all** earlier cases $P(1), \\dots, P(k)$ when proving $P(k+1)$, where the Principle of Mathematical Induction assumes only $P(k)$. It is handy when a step depends on more than one earlier case, as with the Fibonacci numbers.",
   sessionId: induction.id,
   sections: [
     { kind: "definition", title: "Principle of Strong Induction (POSI)", body: "Let $P(n)$ be an open sentence. If $P(1)$ is true, and for every $k \\in \\mathbb{N}$, $P(1) \\land P(2) \\land \\dots \\land P(k)$ implies $P(k+1)$, then $P(n)$ is true for all $n \\in \\mathbb{N}$.", passageId: c0 },
@@ -185,6 +185,54 @@ db.saveTopicNotes({
   sections: [{ kind: "definition", title: "List", body: "A list is either `empty` or `(cons v lst)`, where `v` is a value and `lst` is a list.", passageId: racket.chunks[0] }],
 });
 db.setNotesStatus(racket.id, "done");
+
+// More topics, so the course pages have units and the notes link to each other.
+const pomi = session("math135", day("09", "18:30"), 35, "Induction basics", [
+  { title: "Lecture 10 - Induction - MATH 135", text: "Principle of Mathematical Induction (POMI)\nIf P(1) is true, and P(k) implies P(k + 1) for every k ∈ ℕ, then P(n) is true for all n ∈ ℕ." },
+  { title: "Lecture 10 - Induction - MATH 135", text: "Example: 1 + 2 + … + n = n(n + 1)/2. Base case n = 1. Inductive step: add k + 1 to both sides." },
+]);
+db.saveTopicNotes({
+  courseId: "math135",
+  title: "Principle of Induction",
+  key: topicKey("Principle of Induction"),
+  summary: "Proves $P(n)$ for all $n \\in \\mathbb{N}$ from a base case and a step from $P(k)$ to $P(k+1)$.",
+  sessionId: pomi.id,
+  sections: [
+    { kind: "definition", title: "Principle of Mathematical Induction (POMI)", body: "If $P(1)$ is true, and $P(k) \\implies P(k+1)$ for every $k \\in \\mathbb{N}$, then $P(n)$ is true for all $n \\in \\mathbb{N}$.", passageId: pomi.chunks[0] },
+    { kind: "example", title: "Sum of the first $n$ integers", body: "$$1 + 2 + \\dots + n = \\frac{n(n+1)}{2}.$$\n\nCheck $n = 1$, then add $k+1$ to both sides of the statement for $k$.", passageId: pomi.chunks[1] },
+    { kind: "point", title: "When one case isn't enough", body: "If the step needs more than the case just before it, use the Principle of Strong Induction instead.", passageId: pomi.chunks[1] },
+  ],
+});
+db.setNotesStatus(pomi.id, "done");
+const logic = session("math135", day("06", "20:00"), 30, "Logic review", [
+  { title: "Lecture 4 - Logic - MATH 135", text: "Two statements are logically equivalent if they have the same truth value for every assignment.\nExample: ¬(A ∧ B) ≡ ¬A ∨ ¬B (De Morgan)." },
+]);
+db.saveTopicNotes({
+  courseId: "math135",
+  title: "Logical Equivalence",
+  key: topicKey("Logical Equivalence"),
+  summary: "When two statements always have the same truth value.",
+  sessionId: logic.id,
+  sections: [
+    { kind: "definition", title: "Logically Equivalent", body: "Statements $A$ and $B$ are logically equivalent, $A \\equiv B$, if they have the same truth value for every assignment.", passageId: logic.chunks[0] },
+    { kind: "theorem", title: "De Morgan's Laws", body: "$\\neg(A \\land B) \\equiv \\neg A \\lor \\neg B$ and $\\neg(A \\lor B) \\equiv \\neg A \\land \\neg B$. Useful for proving Set Equality with complements.", passageId: logic.chunks[0] },
+  ],
+});
+db.setNotesStatus(logic.id, "done");
+const seqs = session("math137", day("12", "15:10"), 40, "Recursive sequences", [
+  { title: "Lecture 8 - Recursive Sequences - MATH 137", text: "A recursive sequence: a₁ = 1, aₙ₊₁ = √(2 + aₙ). Show it is increasing and bounded above by 2, using induction." },
+]);
+db.saveTopicNotes({
+  courseId: "math137",
+  title: "Recursive Sequences",
+  key: topicKey("Recursive Sequences"),
+  summary: "Sequences defined from earlier terms; prove they converge by showing they are monotone and bounded.",
+  sessionId: seqs.id,
+  sections: [
+    { kind: "example", title: "$a_{n+1} = \\sqrt{2 + a_n}$", body: "Show $a_n < 2$ for all $n$ with the Principle of Mathematical Induction, then that the sequence increases; so it converges, and the limit $L$ satisfies $L = \\sqrt{2 + L}$, so $L = 2$.", passageId: seqs.chunks[0] },
+  ],
+});
+db.setNotesStatus(seqs.id, "done");
 
 db.close();
 console.log(`Demo database written to ${path}`);

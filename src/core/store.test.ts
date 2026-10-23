@@ -155,7 +155,7 @@ test("upgrading an older database backs it up first and indexes the existing pas
     db.close();
     // Turn it back into a version-4 database (before "Find it").
     const raw = new DatabaseSync(path);
-    raw.exec(`DROP TABLE buddy_chats; DROP TABLE notes_fts; DROP TABLE note_sections; DROP TABLE topics;
+    raw.exec(`DROP TABLE xref_cache; DROP TABLE units; DROP TABLE buddy_chats; DROP TABLE notes_fts; DROP TABLE note_sections; DROP TABLE topics;
               ALTER TABLE sessions DROP COLUMN notes_status; ALTER TABLE sessions DROP COLUMN notes_error;
               ALTER TABLE sessions DROP COLUMN quiz_cloud;
               DROP TRIGGER chunks_fts_insert; DROP TRIGGER chunks_fts_delete; DROP TRIGGER chunks_fts_update;

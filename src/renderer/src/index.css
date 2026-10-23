@@ -183,6 +183,9 @@ select:focus-visible {
 .rich pre { margin: 0.75em 0; padding: 0.75em 1em; border-radius: 12px; overflow-x: auto; background: var(--paper); border: 1px solid var(--line); }
 .rich pre code { padding: 0; background: none; }
 .rich .katex-display { margin: 0.75em 0; overflow-x: auto; overflow-y: hidden; }
+/* Cross-references in notes: a quiet dotted underline (links stay neutral, not indigo). */
+.rich a.xref { color: inherit; text-decoration: underline dotted; text-decoration-color: color-mix(in srgb, var(--ink) 45%, transparent); text-underline-offset: 3px; text-decoration-thickness: 1.5px; cursor: pointer; border-radius: 4px; transition: background-color 150ms, text-decoration-color 150ms; }
+.rich a.xref:hover { background: var(--hover); text-decoration-style: solid; text-decoration-color: var(--ink); }
 
 /* ---------- Study Buddy animations ---------- */
 .buddy g,

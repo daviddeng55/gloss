@@ -8,12 +8,14 @@ import { checkAi, MATH_READER, readMathParagraphs } from "../core/ai.ts";
 import { MockProvider, provider, setProvider } from "../core/provider.ts";
 import { BuddyService } from "./buddy.ts";
 import { CloudService } from "./cloud.ts";
+import { XrefIndex } from "./xref.ts";
+import { unitKey } from "../core/units.ts";
 import { CaptureLoop, DEFAULT_SETTINGS } from "../core/capture.ts";
 import { Chunker } from "../core/chunker.ts";
 import { StudyDb } from "../core/db.ts";
 import { VisionHelper } from "../core/helper.ts";
 import { loadNeverRecord } from "../core/privacy.ts";
-import type { AppState, Course, NoteTree, PopoverView, StartResult } from "../shared/types.ts";
+import type { AppState, Course, CourseNotes, NoteTree, PopoverView, StartResult } from "../shared/types.ts";
 import { loadSettings, sanitizeSettings, type Settings } from "../core/settings.ts";
 import { writeFileSync } from "node:fs";
 import { ConfusionDetector } from "../core/confusion.ts";
@@ -51,6 +53,7 @@ let learner: LearnerService;
 let notes: NotesService;
 let buddy: BuddyService;
 let cloud: CloudService;
+let xrefs: XrefIndex;
 let pickerWin: BrowserWindow | null = null;
 let learnWin: BrowserWindow | null = null;
 let warmupWin: BrowserWindow | null = null;
@@ -508,6 +511,23 @@ function openReview(sessionId: string, section?: "summary" | "quiz") {
 }
 
 /** The Notes sidebar: topics grouped by course, in courses.json order (unknown courses last). */
+/** A course's notes page: its units in order with their topics, then any topics not in a unit. */
+function courseNotes(courseId: string): CourseNotes {
+  const { units, topics } = db.courseNotes(courseId);
+  const card = (t: (typeof topics)[number]) => ({ id: t.id, title: t.title, summary: t.summary, sections: t.sections, updatedAt: t.updatedAt });
+  const unsorted = topics.filter((t) => !t.unitId);
+  return {
+    courseId,
+    courseName: loadCourses().find((c) => c.id === courseId)?.name ?? courseId,
+    units: [
+      ...units.map((u) => ({ id: u.id, title: u.title, topics: topics.filter((t) => t.unitId === u.id).map(card) })),
+      ...(unsorted.length ? [{ id: null, title: units.length ? "Other topics" : "Topics", topics: unsorted.map(card) }] : []),
+    ],
+    sorting: notes.sorting(courseId),
+    canSort: unsorted.some((t) => !t.locked),
+  };
+}
+
 function noteTree(): NoteTree {
   const { topics, pending } = db.noteTree();
   const courses = loadCourses();
@@ -574,8 +594,32 @@ function registerIpc() {
   ipcMain.handle("notes:tree", () => noteTree());
   ipcMain.handle("notes:topic", (_e, id: unknown) => {
     const t = db.getTopic(String(id));
-    return t ? { ...t, courseName: loadCourses().find((c) => c.id === t.courseId)?.name ?? t.courseId } : null;
+    return t ? { ...t, courseName: loadCourses().find((c) => c.id === t.courseId)?.name ?? t.courseId, ...xrefs.forTopic(t.id) } : null;
   });
+  ipcMain.handle("notes:course", (_e, courseId: unknown) => courseNotes(String(courseId)));
+  const notesChanged = () => {
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send("notes");
+  };
+  ipcMain.handle("notes:move-topic", (_e, topicId: unknown, unitId: unknown, before: unknown) => {
+    db.placeTopic(String(topicId), typeof unitId === "string" ? unitId : null, { byYou: true, beforeTopicId: typeof before === "string" ? before : undefined });
+    notesChanged();
+  });
+  ipcMain.handle("notes:rename-unit", (_e, unitId: unknown, title: unknown) => {
+    const t = String(title ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+    if (t) db.renameUnit(String(unitId), t, unitKey(t));
+    notesChanged();
+  });
+  ipcMain.handle("notes:add-unit", (_e, courseId: unknown, title: unknown) => {
+    const t = String(title ?? "").replace(/\s+/g, " ").trim().slice(0, 60) || "New unit";
+    const id = db.createUnit(String(courseId), t, unitKey(t), true);
+    notesChanged();
+    return id;
+  });
+  ipcMain.handle("notes:delete-unit", (_e, unitId: unknown) => {
+    db.deleteUnit(String(unitId));
+    notesChanged();
+  });
+  ipcMain.handle("notes:sort", (_e, courseId: unknown) => notes.sortCourse(String(courseId)).catch((err) => console.log(`[notes] sorting failed: ${(err as Error).message}`)));
   ipcMain.handle("notes:capture", (_e, chunkId: unknown) => db.getChunk(String(chunkId)));
   ipcMain.handle("notes:delete-topic", (_e, id: unknown) => {
     db.deleteTopic(String(id));
@@ -707,6 +751,7 @@ app.whenReady().then(() => {
   // GLOSS_DB lets development checks use a throwaway database.
   db = new StudyDb(process.env.GLOSS_DB ?? userDbPath());
   learner = new LearnerService(db, loadCourses);
+  xrefs = new XrefIndex(db, loadCourses);
   cloud = new CloudService(() => loadSettings(settingsFile()));
   void cloud.start();
   const cloudOk = (apps: string[]) => cloud.allows(apps);
@@ -979,19 +1024,56 @@ async function smokeDesign(dir: string) {
   }
   popup!.hide();
 
+  // Units: the AI sorts each course's topics, as it does after notes are written (pretend AI under GLOSS_AI=mock).
+  if (!empty) for (const c of db.coursesWithUnsortedTopics()) await notes.sortCourse(c);
   showHistory();
   await wait(2500);
   await shot(history!, empty ? "notes-empty" : "notes");
   if (!empty) {
+    const scrollToEnd = () => js(history!, `(() => { const m = document.querySelector("main .overflow-y-auto"); m.scrollTop = m.scrollHeight; })()`);
+    // A topic page, its source, its "Related" list, then a cross-reference followed to another page.
+    await js(history!, `[...document.querySelectorAll("[data-topic]")].find((b) => b.textContent.includes("Strong Induction"))?.click()`);
+    await wait(1000);
+    await shot(history!, "notes-topic");
     await js(history!, `[...document.querySelectorAll("button")].find((b) => b.textContent.startsWith("from "))?.click()`);
     await wait(800);
     await shot(history!, "notes-source");
-    await js(history!, `(() => { const m = document.querySelector("main .overflow-y-auto"); m.scrollTop = m.scrollHeight; })()`);
+    await scrollToEnd();
     await wait(400);
-    await shot(history!, "notes-bottom");
-    await js(history!, `[...document.querySelectorAll("aside button")].find((b) => b.textContent === "Set Equality")?.click()`);
+    await shot(history!, "notes-related");
+    console.log("SMOKE notes cross-references on this page:", await js(history!, `[...document.querySelectorAll("a.xref")].map((a) => a.textContent + " → " + a.title).join(" | ")`));
+    await js(history!, `document.querySelector("a.xref")?.click()`);
+    await wait(1000);
+    await shot(history!, "notes-xref");
+    // Another course's page.
+    await js(history!, `document.querySelector('[data-course="math137"]')?.click()`);
     await wait(800);
-    await shot(history!, "notes-topic2");
+    await shot(history!, "notes-course2");
+    // Drag a topic into another unit, as the mouse would, and check it was saved.
+    await js(history!, `document.querySelector('[data-course="math135"]')?.click()`);
+    await wait(800);
+    console.log(
+      "SMOKE notes drag:",
+      await js(
+        history!,
+        `(async () => {
+          const card = [...document.querySelectorAll("[data-topic]")].find((b) => b.textContent.includes("Logical Equivalence"));
+          const target = [...document.querySelectorAll("[data-unit]")].find((s) => s.querySelector("h2")?.textContent === "Induction");
+          if (!card || !target) return "missing card or unit";
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+          await new Promise((r) => setTimeout(r, 50));
+          target.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+          await new Promise((r) => setTimeout(r, 50));
+          target.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+          await new Promise((r) => setTimeout(r, 400));
+          const saved = await window.api.getCourseNotes("math135");
+          return saved.units.map((u) => u.title + ": " + u.topics.map((t) => t.title).join(", ")).join(" | ");
+        })()`,
+      ),
+    );
+    await wait(600);
+    await shot(history!, "notes-moved");
   }
   await js(history!, `[...document.querySelectorAll("button")].find((b) => b.textContent === "All captures")?.click()`);
   await wait(1000);
@@ -1209,6 +1291,12 @@ async function smokeLearn(dir: string) {
  */
 function mockReply(req: import("../core/provider.ts").ChatRequest): string {
   const prompt = req.messages.map((m) => m.content).join("\n");
+  if (/Group them into units/.test(prompt)) {
+    // Topics are listed as "1. Title — summary": induction topics → "Induction", sets → "Sets", and so on.
+    const unit = (t: string) => (/induction/i.test(t) ? "Induction" : /set|logic|equivalen/i.test(t) ? "Logic and Sets" : /sequence|limit/i.test(t) ? "Sequences" : /list/i.test(t) ? "Lists" : "Other");
+    const lines = [...prompt.matchAll(/^(\d+)\. (.+?)(?: — .*)?$/gm)];
+    return JSON.stringify({ assignments: lines.map((m) => ({ topic: Number(m[1]), unit: unit(m[2]) })) });
+  }
   if (/Write ONE short question/.test(prompt)) return JSON.stringify({ question: "Wait, why are you allowed to assume every smaller case in strong induction?", concept: "Strong induction" });
   if (/Judge the student's latest explanation/.test(prompt)) {
     const last = prompt.split("\nStudent: ").pop() ?? "";
