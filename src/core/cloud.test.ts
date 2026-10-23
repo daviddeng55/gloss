@@ -84,6 +84,12 @@ test("Gemini: rate limits, bad keys and missing models become clear errors (neve
     await assert.rejects(ask(), (e: AiError) => e.code === "rate-limited" && e.retryAfterMs === 17_000);
     reply = { status: 400, body: { error: { message: `API key not valid: ${KEY}`, status: "INVALID_ARGUMENT" } } };
     await assert.rejects(ask(), (e: AiError) => e.code === "bad-key" && !e.message.includes(KEY));
+    // The known problem with some new "AQ." keys gets its own advice.
+    reply = {
+      status: 401,
+      body: { error: { code: 401, message: "Request had invalid authentication credentials.", status: "UNAUTHENTICATED", details: [{ reason: "ACCESS_TOKEN_TYPE_UNSUPPORTED" }] } },
+    };
+    await assert.rejects(ask(), (e: AiError) => e.code === "bad-key" && /ACCESS_TOKEN_TYPE_UNSUPPORTED/.test(e.message) && /Credentials/.test(e.message));
     reply = { status: 404, body: { error: { message: "models/gemini-x is not found" } } };
     await assert.rejects(ask(), (e: AiError) => e.code === "model-missing");
     reply = { status: 503, body: { error: { message: "overloaded" } } };

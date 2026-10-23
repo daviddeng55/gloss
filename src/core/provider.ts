@@ -236,10 +236,12 @@ export class GeminiProvider implements ModelProvider {
   private async failure(res: Response, model: string): Promise<AiError> {
     const text = await res.text().catch(() => "");
     let message = text;
+    let reason = ""; // Google's code for what went wrong, e.g. "API_KEY_INVALID"
     let retryAfterMs: number | undefined;
     try {
-      const err = (JSON.parse(text) as { error?: { message?: string; details?: { retryDelay?: string }[] } }).error;
+      const err = (JSON.parse(text) as { error?: { message?: string; details?: { retryDelay?: string; reason?: string }[] } }).error;
       message = err?.message ?? text;
+      reason = err?.details?.find((d) => d.reason)?.reason ?? "";
       const delay = err?.details?.find((d) => d.retryDelay)?.retryDelay; // e.g. "17s"
       if (delay) retryAfterMs = Math.ceil(parseFloat(delay) * 1000);
     } catch {
@@ -249,8 +251,16 @@ export class GeminiProvider implements ModelProvider {
     if (!retryAfterMs && header > 0) retryAfterMs = header * 1000;
     message = message.replaceAll(this.key, "…").slice(0, 200);
     if (res.status === 429) return new AiError("rate-limited", "Gemini's rate limit was reached.", retryAfterMs);
+    if (reason === "ACCESS_TOKEN_TYPE_UNSUPPORTED" || reason === "API_KEY_SERVICE_BLOCKED") {
+      // A known problem on Google's side with some new "AQ." keys (Google AI forum, Sep–Oct 2026).
+      return new AiError(
+        "bad-key",
+        `Google refused this key (${reason}). This happens with some new "AQ." keys from AI Studio. Try making a new key in AI Studio, ` +
+          `or a standard key: console.cloud.google.com → APIs & Services → Credentials → Create credentials → API key, restricted to the "Generative Language API".`,
+      );
+    }
     if (res.status === 401 || res.status === 403 || /api[_ ]key/i.test(message)) {
-      return new AiError("bad-key", `Gemini didn't accept the API key (Google says: ${message || `error ${res.status}`}).`);
+      return new AiError("bad-key", `Gemini didn't accept the API key (Google says: ${message || `error ${res.status}`}${reason ? `, ${reason}` : ""}).`);
     }
     if (res.status === 404) return new AiError("model-missing", `Gemini has no model called "${model}".`);
     return new AiError("failed", `Gemini error ${res.status}: ${message}`);
